@@ -1,0 +1,67 @@
+name: Build and test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.goos }}/${{ matrix.goarch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            binary: envscout
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            binary: envscout
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            binary: envscout.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Build CLI
+        run: go build -o ${{ matrix.binary }} ./cmd/envscout
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+      - name: Upload CLI binary
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: envscout-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error
+
+  pixi:
+    name: Pixi binding (linux/amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+        with:
+          toolchain: stable
+          cache: true
+      - run: make test-pixi
+      - run: make build-pixi
