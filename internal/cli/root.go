@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"text/tabwriter"
 
+	"github.com/anaconda/envscout/internal/discovery"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -24,11 +25,16 @@ func New() *cobra.Command {
 	var noColor bool
 	var jsonOutput bool
 	find := &cobra.Command{
-		Use:   "find ROOT...",
-		Short: "Find installed conda environments under explicit roots",
-		Args:  cobra.MinimumNArgs(1),
+		Use:   "find [ROOT...]",
+		Short: "Find installed conda environments in known locations or explicit roots",
 		RunE: func(cmd *cobra.Command, roots []string) error {
-			report, err := findCondaWithStatus(roots, cmd.ErrOrStderr())
+			var report discovery.Report
+			var err error
+			if len(roots) == 0 {
+				report, err = discovery.FindKnownCondaWithProgress(nil)
+			} else {
+				report, err = findCondaWithStatus(roots, cmd.ErrOrStderr())
+			}
 			if err != nil {
 				return err
 			}
@@ -44,6 +50,11 @@ func New() *cobra.Command {
 				return nil
 			}
 			color := !noColor && os.Getenv("NO_COLOR") == "" && isTerminal(cmd.OutOrStdout())
+			if report.Mode == discovery.ModeKnownLocations {
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Known locations only (not a full filesystem scan)"); err != nil {
+					return err
+				}
+			}
 			out := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', tabwriter.StripEscape)
 			if _, err := fmt.Fprintln(out, "NAME\tREV\tLOCATION"); err != nil {
 				return err

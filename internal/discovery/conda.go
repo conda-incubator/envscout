@@ -19,6 +19,7 @@ import (
 
 const maxMetadataBytes = 1 << 20
 const maxHistoryBytes = 16 << 20
+const maxMetadataEntries = 10000
 
 // Environment is an installed conda prefix; Name is its directory name, not a registry alias.
 type Environment struct {
@@ -35,10 +36,24 @@ type Issue struct {
 
 // Report keeps the scanned scope and any coverage gaps alongside the results.
 type Report struct {
+	Mode         string        `json:"mode"`
 	Roots        []string      `json:"roots"`
+	Hints        []HintSummary `json:"hints"`
 	Environments []Environment `json:"environments"`
 	Issues       []Issue       `json:"issues"`
 }
+
+// HintSummary counts locations inspected and skipped for one known-location source.
+type HintSummary struct {
+	Source  string `json:"source"`
+	Checked int    `json:"checked"`
+	Skipped int    `json:"skipped"`
+}
+
+const (
+	ModeRoots          = "roots"
+	ModeKnownLocations = "known-locations"
+)
 
 // Progress contains live discovery counters. Folders counts visited directories,
 // not a percentage of the (unknown) total scope.
@@ -54,7 +69,14 @@ func FindConda(roots []string) (Report, error) {
 
 // FindCondaWithProgress reports live counters while searching requested roots.
 func FindCondaWithProgress(roots []string, progress *Progress) (Report, error) {
-	report := Report{Roots: []string{}, Environments: []Environment{}, Issues: []Issue{}}
+	return findCondaWithHints(roots, progress, systemKnownInputs())
+}
+
+func findCondaWithHints(roots []string, progress *Progress, inputs knownInputs) (Report, error) {
+	report := Report{Mode: ModeRoots, Roots: []string{}, Hints: []HintSummary{}, Environments: []Environment{}, Issues: []Issue{}}
+	if len(roots) == 0 {
+		return report, fmt.Errorf("at least one root is required for a full walk")
+	}
 	seenRoots := make(map[string]bool)
 	for _, root := range roots {
 		path, err := filepath.Abs(root)
@@ -88,17 +110,12 @@ func FindCondaWithProgress(roots []string, progress *Progress) (Report, error) {
 		}
 	}
 
-	seen := make(map[string]bool)
-	var mu sync.Mutex
-	addIssue := func(path string, err error) {
-		mu.Lock()
-		report.Issues = append(report.Issues, Issue{Path: path, Error: err.Error()})
-		mu.Unlock()
-	}
+	results := condaResults{report: &report, seen: make(map[string]bool), progress: progress}
+	probeKnownHints(&results, inputs, report.Roots)
 	for _, root := range walkRoots {
 		err := fastwalk.Walk(&fastwalk.Config{Follow: false, NumWorkers: 4}, root, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
-				addIssue(path, walkErr)
+				results.addIssue(path, walkErr)
 				return nil
 			}
 			if entry.IsDir() && progress != nil {
@@ -107,27 +124,12 @@ func FindCondaWithProgress(roots []string, progress *Progress) (Report, error) {
 			if !entry.IsDir() || entry.Name() != "conda-meta" {
 				return nil
 			}
-			valid, err := hasPackageMetadata(path)
-			if err != nil {
-				addIssue(path, err)
+			env, valid, issues := inspectCondaPrefix(filepath.Dir(path))
+			for _, issue := range issues {
+				results.addIssue(issue.Path, errors.New(issue.Error))
 			}
 			if valid {
-				prefix := filepath.Dir(path)
-				rev, revErr := revision(filepath.Join(path, "history"))
-				if revErr != nil && !errors.Is(revErr, fs.ErrNotExist) {
-					addIssue(filepath.Join(path, "history"), revErr)
-				}
-				mu.Lock()
-				if !seen[prefix] {
-					seen[prefix] = true
-					report.Environments = append(report.Environments, Environment{
-						Name: filepath.Base(prefix), Path: prefix, Revision: rev,
-					})
-					if progress != nil {
-						progress.Environments.Add(1)
-					}
-				}
-				mu.Unlock()
+				results.addEnvironment(env)
 			}
 			return fastwalk.SkipDir
 		})
@@ -135,6 +137,37 @@ func FindCondaWithProgress(roots []string, progress *Progress) (Report, error) {
 			return report, fmt.Errorf("walk %q: %w", root, err)
 		}
 	}
+	sortReport(&report)
+	return report, nil
+}
+
+type condaResults struct {
+	report   *Report
+	seen     map[string]bool
+	progress *Progress
+	mu       sync.Mutex
+}
+
+func (r *condaResults) addEnvironment(env Environment) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.seen[env.Path] {
+		return
+	}
+	r.seen[env.Path] = true
+	r.report.Environments = append(r.report.Environments, env)
+	if r.progress != nil {
+		r.progress.Environments.Add(1)
+	}
+}
+
+func (r *condaResults) addIssue(path string, err error) {
+	r.mu.Lock()
+	r.report.Issues = append(r.report.Issues, Issue{Path: path, Error: err.Error()})
+	r.mu.Unlock()
+}
+
+func sortReport(report *Report) {
 	sort.Slice(report.Environments, func(i, j int) bool { return report.Environments[i].Path < report.Environments[j].Path })
 	sort.Slice(report.Issues, func(i, j int) bool {
 		if report.Issues[i].Path == report.Issues[j].Path {
@@ -142,28 +175,80 @@ func FindCondaWithProgress(roots []string, progress *Progress) (Report, error) {
 		}
 		return report.Issues[i].Path < report.Issues[j].Path
 	})
-	return report, nil
+	sort.Slice(report.Hints, func(i, j int) bool { return report.Hints[i].Source < report.Hints[j].Source })
 }
 
-func hasPackageMetadata(metaDir string) (bool, error) {
-	entries, err := os.ReadDir(metaDir)
+func inspectCondaPrefix(prefix string) (Environment, bool, []Issue) {
+	root, err := os.OpenRoot(prefix)
+	if err != nil {
+		return Environment{}, false, []Issue{{Path: prefix, Error: err.Error()}}
+	}
+	defer func() { _ = root.Close() }()
+	return inspectCondaPrefixRoot(root, prefix)
+}
+
+func inspectCondaPrefixRoot(root *os.Root, prefix string) (Environment, bool, []Issue) {
+	metaDir := filepath.Join(prefix, "conda-meta")
+	metaInfo, err := root.Lstat("conda-meta")
+	var issues []Issue
+	if err != nil {
+		issues = append(issues, Issue{Path: metaDir, Error: err.Error()})
+		return Environment{}, false, issues
+	}
+	if !metaInfo.IsDir() {
+		issues = append(issues, Issue{Path: metaDir, Error: "conda-meta is not a directory"})
+		return Environment{}, false, issues
+	}
+	meta, err := root.OpenRoot("conda-meta")
+	if err != nil {
+		issues = append(issues, Issue{Path: metaDir, Error: err.Error()})
+		return Environment{}, false, issues
+	}
+	defer func() { _ = meta.Close() }()
+	valid, err := hasPackageMetadata(meta, metaDir)
+	if err != nil {
+		issues = append(issues, Issue{Path: metaDir, Error: err.Error()})
+	}
+	if !valid {
+		return Environment{}, false, issues
+	}
+	rev, revErr := revisionInRoot(meta, "history")
+	if revErr != nil && !errors.Is(revErr, fs.ErrNotExist) {
+		issues = append(issues, Issue{Path: filepath.Join(metaDir, "history"), Error: revErr.Error()})
+	}
+	return Environment{Name: filepath.Base(prefix), Path: prefix, Revision: rev}, true, issues
+}
+
+func hasPackageMetadata(root *os.Root, metaDir string) (bool, error) {
+	dir, err := root.Open(".")
 	if err != nil {
 		return false, err
 	}
+	defer func() { _ = dir.Close() }()
+	entries, err := dir.ReadDir(maxMetadataEntries + 1)
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
+			return false, err
+		}
+	}
 	var firstErr error
+	if len(entries) > maxMetadataEntries {
+		firstErr = fmt.Errorf("conda-meta exceeds %d entries", maxMetadataEntries)
+		entries = entries[:maxMetadataEntries]
+	}
 	for _, entry := range entries {
 		if entry.IsDir() || entry.Type()&fs.ModeSymlink != 0 || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
 		path := filepath.Join(metaDir, entry.Name())
-		info, err := entry.Info()
+		info, err := root.Lstat(entry.Name())
 		if err != nil || !info.Mode().IsRegular() || info.Size() > maxMetadataBytes {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("invalid or unreadable conda package metadata: %s", path)
 			}
 			continue
 		}
-		file, err := os.Open(path)
+		file, err := root.Open(entry.Name())
 		if err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("read %s: %w", path, err)
@@ -175,7 +260,7 @@ func hasPackageMetadata(metaDir string) (bool, error) {
 			Version string `json:"version"`
 		}
 		openedInfo, statErr := file.Stat()
-		if statErr != nil || !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxMetadataBytes {
+		if statErr != nil || !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxMetadataBytes || !os.SameFile(info, openedInfo) {
 			_ = file.Close()
 			if firstErr == nil {
 				firstErr = fmt.Errorf("invalid or unreadable conda package metadata: %s", path)
@@ -197,14 +282,23 @@ func hasPackageMetadata(metaDir string) (bool, error) {
 // revision mirrors conda.history.History.parse: revision is the zero-based
 // index of a history header, including headers with no package changes.
 func revision(path string) (*int, error) {
-	entry, err := os.Lstat(path)
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	return revisionInRoot(root, filepath.Base(path))
+}
+
+func revisionInRoot(root *os.Root, name string) (*int, error) {
+	entry, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
 	}
 	if !entry.Mode().IsRegular() || entry.Size() > maxHistoryBytes {
 		return nil, fmt.Errorf("history is not a regular file of at most %d bytes", maxHistoryBytes)
 	}
-	file, err := os.Open(path)
+	file, err := root.Open(name)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +307,7 @@ func revision(path string) (*int, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxHistoryBytes {
+	if !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxHistoryBytes || !os.SameFile(entry, openedInfo) {
 		return nil, fmt.Errorf("history is not a regular file of at most %d bytes", maxHistoryBytes)
 	}
 	scanner := bufio.NewScanner(file)
