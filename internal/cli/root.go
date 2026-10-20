@@ -24,10 +24,17 @@ func New() *cobra.Command {
 	}
 	var noColor bool
 	var jsonOutput bool
+	var findSource, findPlatform string
 	find := &cobra.Command{
 		Use:   "find [ROOT...]",
-		Short: "Find installed conda environments in known locations or explicit roots",
+		Short: "Find conda environments in local directories or an OCI image archive",
 		RunE: func(cmd *cobra.Command, roots []string) error {
+			if err := validateImageArgs(findSource, findPlatform, roots); err != nil {
+				return err
+			}
+			if findSource == "oci-archive" {
+				return runImage(cmd, roots[0], findPlatform, false, jsonOutput, noColor)
+			}
 			var report discovery.Report
 			var err error
 			if len(roots) == 0 {
@@ -86,13 +93,27 @@ func New() *cobra.Command {
 	}
 	find.Flags().BoolVar(&noColor, "no-color", false, "disable colored revision numbers")
 	find.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON report, including scope and coverage issues")
+	find.Flags().StringVar(&findSource, "source", "dir", "input source: dir or oci-archive (offline)")
+	find.Flags().StringVar(&findPlatform, "platform", "", "required for images: OS/ARCH[/VARIANT]")
 	root.AddCommand(find)
-	root.AddCommand(&cobra.Command{
+	var scanSource, scanPlatform string
+	scan := &cobra.Command{
 		Use:   "scan ROOT...",
-		Short: "Find conda environments and write one local SBOM per environment",
+		Short: "Write prefix SBOMs for directories or one whole-image SBOM for an OCI archive",
 		Args:  cobra.MinimumNArgs(1),
-		RunE:  runScan,
-	})
+		RunE: func(cmd *cobra.Command, inputs []string) error {
+			if err := validateImageArgs(scanSource, scanPlatform, inputs); err != nil {
+				return err
+			}
+			if scanSource == "oci-archive" {
+				return runImage(cmd, inputs[0], scanPlatform, true, false, true)
+			}
+			return runScan(cmd, inputs)
+		},
+	}
+	scan.Flags().StringVar(&scanSource, "source", "dir", "input source: dir or oci-archive (offline)")
+	scan.Flags().StringVar(&scanPlatform, "platform", "", "required for images: OS/ARCH[/VARIANT]")
+	root.AddCommand(scan)
 	return root
 }
 

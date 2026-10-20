@@ -1,4 +1,9 @@
-.PHONY: build build-pixi native-pixi build-linux build-darwin build-windows test test-pixi test-race vet lint fmt fmt-check mod-tidy actionlint
+.PHONY: build build-pixi native-pixi build-linux build-darwin build-windows image-archive test test-pixi test-race vet lint fmt fmt-check mod-tidy actionlint
+
+IMAGE ?=
+PLATFORM ?= linux/amd64
+ARCHIVE ?= bin/image.tar
+SKOPEO ?= skopeo
 
 PIXI_MODULE = github.com/conda-incubator/go-rattler
 PIXI_TARGET_DIR = $(abspath .go-rattler-native)
@@ -26,6 +31,25 @@ build-darwin:
 build-windows:
 	mkdir -p bin
 	GOOS=windows GOARCH=amd64 go build -o bin/envscout-windows-amd64.exe ./cmd/envscout
+
+# Pass user values through the environment, not as shell source.
+image-archive: export IMAGE := $(IMAGE)
+image-archive: export PLATFORM := $(PLATFORM)
+image-archive: export ARCHIVE := $(ARCHIVE)
+image-archive: export SKOPEO := $(SKOPEO)
+image-archive:
+	@set -eu; \
+	  test -n "$$IMAGE" || { printf '%s\n' 'Usage: make image-archive IMAGE=registry/repository:tag [PLATFORM=linux/amd64] [ARCHIVE=bin/image.tar]' >&2; exit 1; }; \
+	  case "$$PLATFORM" in ''|/*|*/|*//*) printf '%s\n' 'PLATFORM must be OS/ARCH[/VARIANT]' >&2; exit 1;; esac; \
+	  IFS=/; set -f; set -- $$PLATFORM; unset IFS; \
+	  test "$$#" -eq 2 || test "$$#" -eq 3 || { printf '%s\n' 'PLATFORM must be OS/ARCH[/VARIANT]' >&2; exit 1; }; \
+	  for part in "$$@"; do case "$$part" in *[!a-zA-Z0-9_-]*) printf '%s\n' 'Invalid PLATFORM component' >&2; exit 1;; esac; done; \
+	  os="$$1"; arch="$$2"; variant="$${3-}"; \
+	  set -- --override-os "$$os" --override-arch "$$arch"; \
+	  if test -n "$$variant"; then set -- "$$@" --override-variant "$$variant"; fi; \
+	  test ! -e "$$ARCHIVE" && test ! -L "$$ARCHIVE" || { printf 'Archive already exists: %s\n' "$$ARCHIVE" >&2; exit 1; }; \
+	  mkdir -p "$$(dirname "$$ARCHIVE")"; \
+	  "$$SKOPEO" "$$@" copy --format oci --dest-compress-format gzip --dest-force-compress-format "docker://$$IMAGE" "oci-archive:$$ARCHIVE"
 
 test:
 	go test ./...

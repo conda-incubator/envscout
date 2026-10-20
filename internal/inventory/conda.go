@@ -15,10 +15,11 @@ import (
 	"github.com/anchore/syft/syft"
 	"github.com/anchore/syft/syft/format/cyclonedxjson"
 	"github.com/anchore/syft/syft/pkg"
+	"github.com/anchore/syft/syft/sbom"
 	"github.com/anchore/syft/syft/source/directorysource"
 )
 
-// Result describes what Syft cataloged from a single installed prefix.
+// Result describes what Syft cataloged from an installed prefix or image.
 // PythonInstalled counts Python installation metadata, not necessarily pip installs.
 type Result struct {
 	Path            string
@@ -26,6 +27,8 @@ type Result struct {
 	Conda           int
 	PythonInstalled int
 	Other           int
+	Total           int // Unique packages, not CycloneDX components.
+	Unknowns        int // File coordinates with unknowns, not individual diagnostic messages.
 }
 
 // Filename identifies a prefix by a readable folder name and its absolute path.
@@ -87,7 +90,16 @@ func WriteConda(ctx context.Context, env discovery.Environment, outputDir string
 		_ = os.Remove(destination)
 		return Result{}, fmt.Errorf("close SBOM %s: %w", destination, err)
 	}
-	result := Result{Path: destination, SyftVersion: bom.Descriptor.Version}
+	return resultForSBOM(bom, destination), nil
+}
+
+func resultForSBOM(bom *sbom.SBOM, destination string) Result {
+	result := Result{
+		Path:        destination,
+		SyftVersion: bom.Descriptor.Version,
+		Total:       bom.Artifacts.Packages.PackageCount(),
+		Unknowns:    len(bom.Artifacts.Unknowns),
+	}
 	for p := range bom.Artifacts.Packages.Enumerate() {
 		switch {
 		case p.Type == pkg.CondaPkg:
@@ -98,5 +110,5 @@ func WriteConda(ctx context.Context, env discovery.Environment, outputDir string
 			result.Other++
 		}
 	}
-	return result, nil
+	return result
 }
