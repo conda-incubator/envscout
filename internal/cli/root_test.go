@@ -20,7 +20,6 @@ func TestCommands(t *testing.T) {
 		{"help", []string{"--help"}, "find", false},
 		{"find help", []string{"find", "--help"}, "installed conda environments", false},
 		{"scan help", []string{"scan", "--help"}, "one local SBOM", false},
-		{"find requires root", []string{"find"}, "requires at least 1 arg", true},
 		{"find invalid root", []string{"find", "not-a-real-root"}, "root", true},
 		{"scan requires root", []string{"scan"}, "requires at least 1 arg", true},
 		{"scan rejects missing root", []string{"scan", "not-a-real-root"}, "root", true},
@@ -137,6 +136,62 @@ func TestFindJSON(t *testing.T) {
 	}
 	if len(report.Roots) != 1 || len(report.Environments) != 1 || report.Environments[0].Name != "demo" || report.Environments[0].Revision != nil {
 		t.Fatalf("unexpected report: %+v", report)
+	}
+}
+
+func TestFindKnownLocationsJSON(t *testing.T) {
+	home := t.TempDir()
+	var err error
+	home, err = filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CONDA_PREFIX", "")
+	t.Setenv("MAMBA_ROOT_PREFIX", "")
+	t.Setenv("CONDA_ENVS_PATH", "")
+	t.Setenv("PIXI_HOME", "")
+	t.Setenv("PIXI_PROJECT_ROOT", "")
+	t.Chdir(home)
+	meta := filepath.Join(home, "miniconda3", "envs", "demo", "conda-meta")
+	if err := os.MkdirAll(meta, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(meta, "demo.json"), []byte(`{"name":"demo","version":"1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := New()
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"find", "--json"})
+	// Other platform-default hints can be inaccessible on the test host; their
+	// coverage errors must not prevent a structured partial report.
+	_ = cmd.Execute()
+	var report struct {
+		Mode         string   `json:"mode"`
+		Roots        []string `json:"roots"`
+		Environments []struct {
+			Name string `json:"name"`
+		} `json:"environments"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatalf("known-location output was not JSON: %v: %s", err, output.String())
+	}
+	found := false
+	for _, env := range report.Environments {
+		found = found || env.Name == "demo"
+	}
+	if report.Mode != "known-locations" || len(report.Roots) != 0 || !found {
+		t.Fatalf("unexpected limited scope report: %+v", report)
+	}
+	text := New()
+	output.Reset()
+	text.SetOut(&output)
+	text.SetArgs([]string{"find"})
+	_ = text.Execute()
+	if !strings.Contains(output.String(), "Known locations only (not a full filesystem scan)") || !strings.Contains(output.String(), "demo") {
+		t.Fatalf("quick-mode text report: %s", output.String())
 	}
 }
 
