@@ -18,8 +18,8 @@ func TestCommands(t *testing.T) {
 		wantErr bool
 	}{
 		{"help", []string{"--help"}, "find", false},
-		{"find help", []string{"find", "--help"}, "installed conda environments", false},
-		{"scan help", []string{"scan", "--help"}, "one local SBOM", false},
+		{"find help", []string{"find", "--help"}, "OCI image archive", false},
+		{"scan help", []string{"scan", "--help"}, "one whole-image SBOM", false},
 		{"find invalid root", []string{"find", "not-a-real-root"}, "root", true},
 		{"scan requires root", []string{"scan"}, "requires at least 1 arg", true},
 		{"scan rejects missing root", []string{"scan", "not-a-real-root"}, "root", true},

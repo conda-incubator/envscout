@@ -255,10 +255,6 @@ func hasPackageMetadata(root *os.Root, metaDir string) (bool, error) {
 			}
 			continue
 		}
-		var metadata struct {
-			Name    string `json:"name"`
-			Version string `json:"version"`
-		}
 		openedInfo, statErr := file.Stat()
 		if statErr != nil || !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxMetadataBytes || !os.SameFile(info, openedInfo) {
 			_ = file.Close()
@@ -267,9 +263,9 @@ func hasPackageMetadata(root *os.Root, metaDir string) (bool, error) {
 			}
 			continue
 		}
-		err = json.NewDecoder(io.LimitReader(file, maxMetadataBytes)).Decode(&metadata)
+		valid := validPackageMetadata(io.LimitReader(file, maxMetadataBytes))
 		closeErr := file.Close()
-		if err == nil && closeErr == nil && metadata.Name != "" && metadata.Version != "" {
+		if valid && closeErr == nil {
 			return true, firstErr
 		}
 		if firstErr == nil {
@@ -277,6 +273,14 @@ func hasPackageMetadata(root *os.Root, metaDir string) (bool, error) {
 		}
 	}
 	return false, firstErr
+}
+
+func validPackageMetadata(reader io.Reader) bool {
+	var metadata struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	return json.NewDecoder(reader).Decode(&metadata) == nil && metadata.Name != "" && metadata.Version != ""
 }
 
 // revision mirrors conda.history.History.parse: revision is the zero-based
@@ -310,7 +314,11 @@ func revisionInRoot(root *os.Root, name string) (*int, error) {
 	if !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxHistoryBytes || !os.SameFile(entry, openedInfo) {
 		return nil, fmt.Errorf("history is not a regular file of at most %d bytes", maxHistoryBytes)
 	}
-	scanner := bufio.NewScanner(file)
+	return revisionFromReader(file)
+}
+
+func revisionFromReader(reader io.Reader) (*int, error) {
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), maxMetadataBytes)
 	count := 0
 	for scanner.Scan() {

@@ -42,7 +42,7 @@ func TestWriteConda(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Conda != 1 || result.PythonInstalled != 1 || result.Other != 0 {
+	if result.Conda != 1 || result.PythonInstalled != 1 || result.Other != 0 || result.Total != 2 {
 		t.Fatalf("unexpected Syft observations: %+v", result)
 	}
 	data, err := os.ReadFile(result.Path)
