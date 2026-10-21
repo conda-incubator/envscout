@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -356,6 +357,10 @@ func openHintDir(path string, roots []string) (*os.Root, error) {
 }
 
 func probeKnownHints(results *condaResults, inputs knownInputs, roots []string) {
+	ctx := results.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	seenHints := make(map[locationHintKey]bool)
 	seenPrefixes := make(map[string]bool)
 	seenContainers := make(map[string]bool)
@@ -369,6 +374,9 @@ func probeKnownHints(results *condaResults, inputs knownInputs, roots []string) 
 	}
 	openDir := func(path string) (*os.Root, error) { return openHintDir(path, roots) }
 	for _, hint := range knownHints(inputs, roots, results.report) {
+		if ctx.Err() != nil {
+			break
+		}
 		container := hint.path
 		if hint.kind == rootHint {
 			container = filepath.Join(hint.path, "envs")
@@ -439,6 +447,13 @@ type locationHintKey struct {
 }
 
 func probePrefix(results *condaResults, path string, roots []string, budget *int, seen map[string]bool, reportIssue func(string, error), openDir func(string) (*os.Root, error)) {
+	ctx := results.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	if !inScope(path, roots) {
 		return
 	}
@@ -466,7 +481,7 @@ func probePrefix(results *condaResults, path string, roots []string, budget *int
 		return
 	}
 	defer func() { _ = root.Close() }()
-	env, valid, issues := inspectCondaPrefixRoot(root, path)
+	env, valid, issues := inspectCondaPrefixRootOptions(ctx, root, path, !results.skipHistory)
 	for _, problem := range issues {
 		reportIssue(problem.Path, errors.New(problem.Error))
 	}

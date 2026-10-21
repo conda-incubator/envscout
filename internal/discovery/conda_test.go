@@ -113,3 +113,10 @@ func TestRevision(t *testing.T) {
 }
 
 func intPtr(value int) *int { return &value }
+
+func TestHistoryReaderEnforcesBytesEvenIfFileGrows(t *testing.T) {
+	_, err := revisionFromBoundedReader(strings.NewReader(strings.Repeat("==> transaction <==\n", 100)), 128)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("growing history escaped read bound: %v", err)
+	}
+}

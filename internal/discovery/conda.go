@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -72,8 +73,29 @@ func FindCondaWithProgress(roots []string, progress *Progress) (Report, error) {
 	return findCondaWithHints(roots, progress, systemKnownInputs())
 }
 
+// FindCondaContext adds cancellation to the explicit walker; hints remain bounded.
+func FindCondaContext(ctx context.Context, roots []string, progress *Progress) (Report, error) {
+	return findCondaWithHintsContext(ctx, roots, progress, systemKnownInputs())
+}
+
+// FindCondaFacts lets collectors omit history when no enabled rule requires it.
+func FindCondaFacts(ctx context.Context, roots []string, progress *Progress, readHistory bool) (Report, error) {
+	return walkConda(ctx, roots, progress, systemKnownInputs(), readHistory)
+}
+
 func findCondaWithHints(roots []string, progress *Progress, inputs knownInputs) (Report, error) {
+	return findCondaWithHintsContext(context.Background(), roots, progress, inputs)
+}
+
+func findCondaWithHintsContext(ctx context.Context, roots []string, progress *Progress, inputs knownInputs) (Report, error) {
+	return walkConda(ctx, roots, progress, inputs, true)
+}
+
+func walkConda(ctx context.Context, roots []string, progress *Progress, inputs knownInputs, readHistory bool) (Report, error) {
 	report := Report{Mode: ModeRoots, Roots: []string{}, Hints: []HintSummary{}, Environments: []Environment{}, Issues: []Issue{}}
+	if err := ctx.Err(); err != nil {
+		return report, err
+	}
 	if len(roots) == 0 {
 		return report, fmt.Errorf("at least one root is required for a full walk")
 	}
@@ -110,10 +132,13 @@ func findCondaWithHints(roots []string, progress *Progress, inputs knownInputs) 
 		}
 	}
 
-	results := condaResults{report: &report, seen: make(map[string]bool), progress: progress}
+	results := condaResults{report: &report, seen: make(map[string]bool), progress: progress, ctx: ctx, skipHistory: !readHistory}
 	probeKnownHints(&results, inputs, report.Roots)
 	for _, root := range walkRoots {
 		err := fastwalk.Walk(&fastwalk.Config{Follow: false, NumWorkers: 4}, root, func(path string, entry fs.DirEntry, walkErr error) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if walkErr != nil {
 				results.addIssue(path, walkErr)
 				return nil
@@ -124,7 +149,27 @@ func findCondaWithHints(roots []string, progress *Progress, inputs knownInputs) 
 			if !entry.IsDir() || entry.Name() != "conda-meta" {
 				return nil
 			}
-			env, valid, issues := inspectCondaPrefix(filepath.Dir(path))
+			expectedMeta, err := entry.Info()
+			if err != nil {
+				results.addIssue(path, err)
+				return fastwalk.SkipDir
+			}
+			prefix, err := openHintDir(filepath.Dir(path), []string{root})
+			if err != nil {
+				results.addIssue(filepath.Dir(path), err)
+				return fastwalk.SkipDir
+			}
+			openedMeta, err := prefix.Lstat("conda-meta")
+			if err != nil || !openedMeta.IsDir() || !os.SameFile(expectedMeta, openedMeta) {
+				_ = prefix.Close()
+				results.addIssue(path, fmt.Errorf("prefix metadata changed during traversal"))
+				return fastwalk.SkipDir
+			}
+			env, valid, issues := inspectCondaPrefixRootOptions(ctx, prefix, filepath.Dir(path), readHistory)
+			_ = prefix.Close()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			for _, issue := range issues {
 				results.addIssue(issue.Path, errors.New(issue.Error))
 			}
@@ -138,14 +183,16 @@ func findCondaWithHints(roots []string, progress *Progress, inputs knownInputs) 
 		}
 	}
 	sortReport(&report)
-	return report, nil
+	return report, ctx.Err()
 }
 
 type condaResults struct {
-	report   *Report
-	seen     map[string]bool
-	progress *Progress
-	mu       sync.Mutex
+	report      *Report
+	seen        map[string]bool
+	progress    *Progress
+	ctx         context.Context
+	skipHistory bool
+	mu          sync.Mutex
 }
 
 func (r *condaResults) addEnvironment(env Environment) {
@@ -178,16 +225,7 @@ func sortReport(report *Report) {
 	sort.Slice(report.Hints, func(i, j int) bool { return report.Hints[i].Source < report.Hints[j].Source })
 }
 
-func inspectCondaPrefix(prefix string) (Environment, bool, []Issue) {
-	root, err := os.OpenRoot(prefix)
-	if err != nil {
-		return Environment{}, false, []Issue{{Path: prefix, Error: err.Error()}}
-	}
-	defer func() { _ = root.Close() }()
-	return inspectCondaPrefixRoot(root, prefix)
-}
-
-func inspectCondaPrefixRoot(root *os.Root, prefix string) (Environment, bool, []Issue) {
+func inspectCondaPrefixRootOptions(ctx context.Context, root *os.Root, prefix string, readHistory bool) (Environment, bool, []Issue) {
 	metaDir := filepath.Join(prefix, "conda-meta")
 	metaInfo, err := root.Lstat("conda-meta")
 	var issues []Issue
@@ -205,21 +243,27 @@ func inspectCondaPrefixRoot(root *os.Root, prefix string) (Environment, bool, []
 		return Environment{}, false, issues
 	}
 	defer func() { _ = meta.Close() }()
-	valid, err := hasPackageMetadata(meta, metaDir)
+	valid, err := hasPackageMetadataContext(ctx, meta, metaDir)
 	if err != nil {
 		issues = append(issues, Issue{Path: metaDir, Error: err.Error()})
 	}
 	if !valid {
 		return Environment{}, false, issues
 	}
-	rev, revErr := revisionInRoot(meta, "history")
+	if !readHistory {
+		return Environment{Name: filepath.Base(prefix), Path: prefix}, true, issues
+	}
+	rev, revErr := revisionInRootContext(ctx, meta, "history")
 	if revErr != nil && !errors.Is(revErr, fs.ErrNotExist) {
 		issues = append(issues, Issue{Path: filepath.Join(metaDir, "history"), Error: revErr.Error()})
 	}
 	return Environment{Name: filepath.Base(prefix), Path: prefix, Revision: rev}, true, issues
 }
 
-func hasPackageMetadata(root *os.Root, metaDir string) (bool, error) {
+func hasPackageMetadataContext(ctx context.Context, root *os.Root, metaDir string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	dir, err := root.Open(".")
 	if err != nil {
 		return false, err
@@ -237,6 +281,9 @@ func hasPackageMetadata(root *os.Root, metaDir string) (bool, error) {
 		entries = entries[:maxMetadataEntries]
 	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if entry.IsDir() || entry.Type()&fs.ModeSymlink != 0 || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
@@ -263,7 +310,7 @@ func hasPackageMetadata(root *os.Root, metaDir string) (bool, error) {
 			}
 			continue
 		}
-		valid := validPackageMetadata(io.LimitReader(file, maxMetadataBytes))
+		valid := validPackageMetadata(imageContextReader{ctx, io.LimitReader(file, maxMetadataBytes)})
 		closeErr := file.Close()
 		if valid && closeErr == nil {
 			return true, firstErr
@@ -295,6 +342,13 @@ func revision(path string) (*int, error) {
 }
 
 func revisionInRoot(root *os.Root, name string) (*int, error) {
+	return revisionInRootContext(context.Background(), root, name)
+}
+
+func revisionInRootContext(ctx context.Context, root *os.Root, name string) (*int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	entry, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
@@ -314,7 +368,16 @@ func revisionInRoot(root *os.Root, name string) (*int, error) {
 	if !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxHistoryBytes || !os.SameFile(entry, openedInfo) {
 		return nil, fmt.Errorf("history is not a regular file of at most %d bytes", maxHistoryBytes)
 	}
-	return revisionFromReader(file)
+	return revisionFromBoundedReader(imageContextReader{ctx, file}, maxHistoryBytes)
+}
+
+func revisionFromBoundedReader(input io.Reader, maxBytes int64) (*int, error) {
+	reader := &io.LimitedReader{R: input, N: maxBytes + 1}
+	revision, err := revisionFromReader(reader)
+	if reader.N == 0 {
+		return nil, fmt.Errorf("history exceeds %d bytes", maxBytes)
+	}
+	return revision, err
 }
 
 func revisionFromReader(reader io.Reader) (*int, error) {

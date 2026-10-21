@@ -114,6 +114,7 @@ func New() *cobra.Command {
 	scan.Flags().StringVar(&scanSource, "source", "dir", "input source: dir or oci-archive (offline)")
 	scan.Flags().StringVar(&scanPlatform, "platform", "", "required for images: OS/ARCH[/VARIANT]")
 	root.AddCommand(scan)
+	root.AddCommand(lintCommand())
 	return root
 }
 

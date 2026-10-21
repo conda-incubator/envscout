@@ -1,9 +1,11 @@
-.PHONY: build build-pixi native-pixi build-linux build-darwin build-windows image-archive test test-pixi test-race vet lint fmt fmt-check mod-tidy actionlint
+.PHONY: build build-pixi native-pixi build-linux build-darwin build-windows image-archive example-image example-lint lint-demo test test-pixi test-race vet lint fmt fmt-check mod-tidy actionlint
 
 IMAGE ?=
 PLATFORM ?= linux/amd64
 ARCHIVE ?= bin/image.tar
 SKOPEO ?= skopeo
+EXAMPLE_ARCHIVE ?= bin/lint-example.tar
+BUILDER ?=
 
 PIXI_MODULE = github.com/conda-incubator/go-rattler
 PIXI_TARGET_DIR = $(abspath .go-rattler-native)
@@ -53,6 +55,35 @@ image-archive:
 
 test:
 	go test ./...
+
+lint-demo:
+	go test -count=1 -v ./internal/cli -run '^TestLintImageMultipleRulesAndLayerRetention$$'
+
+example-image: export EXAMPLE_ARCHIVE := $(EXAMPLE_ARCHIVE)
+example-image: export PLATFORM := $(PLATFORM)
+example-image: export BUILDER := $(BUILDER)
+example-image:
+	@set -eu; \
+	  test ! -e "$$EXAMPLE_ARCHIVE" && test ! -L "$$EXAMPLE_ARCHIVE" || { printf 'Archive already exists: %s\n' "$$EXAMPLE_ARCHIVE" >&2; exit 1; }; \
+	  case "$$EXAMPLE_ARCHIVE" in *','*|*'='*) printf '%s\n' 'EXAMPLE_ARCHIVE must not contain comma or equals' >&2; exit 1;; esac; \
+	  mkdir -p "$$(dirname "$$EXAMPLE_ARCHIVE")"; \
+	  builder="$$BUILDER"; temporary=''; staging="$$EXAMPLE_ARCHIVE.partial-$$$$"; \
+	  trap 'rm -f "$$staging"; if test -n "$$temporary"; then docker buildx rm "$$temporary" >/dev/null 2>&1 || true; fi' EXIT; \
+	  if test -z "$$builder"; then \
+	    builder="envscout-example-$$$$"; \
+	    docker buildx create --name "$$builder" --driver docker-container >/dev/null; \
+	    temporary="$$builder"; \
+	  fi; \
+	  docker buildx build --builder "$$builder" --platform "$$PLATFORM" --provenance=false \
+	    --output "type=oci,dest=$$staging,compression=gzip,force-compression=true" examples; \
+	  test ! -e "$$EXAMPLE_ARCHIVE" && test ! -L "$$EXAMPLE_ARCHIVE" || { printf 'Archive appeared during build: %s\n' "$$EXAMPLE_ARCHIVE" >&2; exit 1; }; \
+	  mv "$$staging" "$$EXAMPLE_ARCHIVE"
+
+example-lint: export EXAMPLE_ARCHIVE := $(EXAMPLE_ARCHIVE)
+example-lint: export PLATFORM := $(PLATFORM)
+example-lint:
+	@if test ! -e "$$EXAMPLE_ARCHIVE" && test ! -L "$$EXAMPLE_ARCHIVE"; then $(MAKE) example-image; fi
+	./envscout lint --source oci-archive --platform "$$PLATFORM" --profile container-distroless "$$EXAMPLE_ARCHIVE"
 
 test-pixi: native-pixi
 	CGO_ENABLED=1 CGO_LDFLAGS="-L$(PIXI_NATIVE_LIB_DIR) $(CGO_LDFLAGS)" go test -tags pixi -modfile=go.pixi.mod ./...

@@ -21,6 +21,7 @@ type Entry struct {
 	Name, Data string
 	Type       byte
 	Link       string
+	Mode       int64
 }
 
 func Archive(t *testing.T, layers ...[]Entry) string {
@@ -56,7 +57,11 @@ func ArchiveVariant(t *testing.T, osName, architecture, variant string, layers .
 			if kind == tar.TypeReg {
 				size = int64(len(entry.Data))
 			}
-			if err := tw.WriteHeader(&tar.Header{Name: entry.Name, Mode: 0o644, Typeflag: kind, Size: size, Linkname: entry.Link}); err != nil {
+			mode := entry.Mode
+			if mode == 0 {
+				mode = 0o644
+			}
+			if err := tw.WriteHeader(&tar.Header{Name: entry.Name, Mode: mode, Typeflag: kind, Size: size, Linkname: entry.Link}); err != nil {
 				t.Fatal(err)
 			}
 			if size > 0 {
