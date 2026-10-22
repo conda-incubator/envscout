@@ -93,27 +93,25 @@ func FindKnownCondaWithProgress(progress *Progress) (Report, error) {
 func findKnownConda(inputs knownInputs, progress *Progress) (Report, error) {
 	report := Report{Mode: ModeKnownLocations, Roots: []string{}, Hints: []HintSummary{}, Environments: []Environment{}, Issues: []Issue{}}
 	results := condaResults{report: &report, seen: make(map[string]bool), progress: progress}
-	probeKnownHints(&results, inputs, nil)
+	probeKnownHints(&results, inputs)
 	sortReport(&report)
 	return report, nil
 }
 
-func knownHints(inputs knownInputs, roots []string, report *Report) []locationHint {
+func knownHints(inputs knownInputs, report *Report) []locationHint {
 	var hints []locationHint
-	if roots == nil {
-		if inputs.homeErr != nil {
-			report.Issues = append(report.Issues, Issue{Path: "home", Error: inputs.homeErr.Error()})
-		}
-		if inputs.cwdErr != nil {
-			report.Issues = append(report.Issues, Issue{Path: "cwd", Error: inputs.cwdErr.Error()})
-		}
+	if inputs.homeErr != nil {
+		report.Issues = append(report.Issues, Issue{Path: "home", Error: inputs.homeErr.Error()})
+	}
+	if inputs.cwdErr != nil {
+		report.Issues = append(report.Issues, Issue{Path: "cwd", Error: inputs.cwdErr.Error()})
 	}
 	add := func(path, source string, kind hintKind, configured bool) {
 		if path == "" {
 			return
 		}
 		if len(path) > maxHintPathBytes {
-			if configured && roots == nil {
+			if configured {
 				report.Issues = append(report.Issues, Issue{Path: source, Error: "hint path exceeds known-location limit"})
 			}
 			return
@@ -122,7 +120,7 @@ func knownHints(inputs knownInputs, roots []string, report *Report) []locationHi
 			path = filepath.Join(inputs.home, path[2:])
 		}
 		if !filepath.IsAbs(path) {
-			if configured && roots == nil {
+			if configured {
 				report.Issues = append(report.Issues, Issue{Path: source, Error: "hint must be an absolute path"})
 			}
 			return
@@ -133,9 +131,7 @@ func knownHints(inputs knownInputs, roots []string, report *Report) []locationHi
 	add(inputs.env[mambaRootVar], mambaRootVar, rootHint, true)
 	if raw := inputs.env[condaEnvsPathVar]; raw != "" {
 		if len(raw) > maxPathListBytes {
-			if roots == nil {
-				report.Issues = append(report.Issues, Issue{Path: condaEnvsPathVar, Error: "path list exceeds known-location size limit"})
-			}
+			report.Issues = append(report.Issues, Issue{Path: condaEnvsPathVar, Error: "path list exceeds known-location size limit"})
 		} else {
 			separator := inputs.pathSeparator
 			if separator == 0 {
@@ -143,9 +139,7 @@ func knownHints(inputs knownInputs, roots []string, report *Report) []locationHi
 			}
 			paths := strings.Split(raw, string(separator))
 			if len(paths) > maxHintCandidates {
-				if roots == nil {
-					report.Issues = append(report.Issues, Issue{Path: condaEnvsPathVar, Error: "path list exceeds known-location limit"})
-				}
+				report.Issues = append(report.Issues, Issue{Path: condaEnvsPathVar, Error: "path list exceeds known-location limit"})
 				paths = paths[:maxHintCandidates]
 			}
 			for _, path := range paths {
@@ -170,27 +164,21 @@ func knownHints(inputs knownInputs, roots []string, report *Report) []locationHi
 	}
 	if inputs.home != "" {
 		registry := filepath.Join(inputs.home, ".conda", "environments.txt")
-		if roots == nil {
-			if safe, err := safeHintDir(filepath.Dir(registry)); err != nil {
-				if roots == nil {
-					report.Issues = append(report.Issues, Issue{Path: registry, Error: err.Error()})
-				}
-			} else if safe {
-				paths, err := readRegistry(registry)
-				if err != nil && roots == nil {
-					report.Issues = append(report.Issues, Issue{Path: registry, Error: err.Error()})
-				}
-				for _, path := range paths {
-					add(path, "conda/environments.txt", prefixHint, false)
-				}
+		if safe, err := safeHintDir(filepath.Dir(registry)); err != nil {
+			report.Issues = append(report.Issues, Issue{Path: registry, Error: err.Error()})
+		} else if safe {
+			paths, err := readRegistry(registry)
+			if err != nil {
+				report.Issues = append(report.Issues, Issue{Path: registry, Error: err.Error()})
+			}
+			for _, path := range paths {
+				add(path, "conda/environments.txt", prefixHint, false)
 			}
 		}
 	}
 	if pixiHome := inputs.env[pixiHomeVar]; pixiHome != "" {
 		if !filepath.IsAbs(pixiHome) {
-			if roots == nil {
-				report.Issues = append(report.Issues, Issue{Path: pixiHomeVar, Error: "hint must be an absolute path"})
-			}
+			report.Issues = append(report.Issues, Issue{Path: pixiHomeVar, Error: "hint must be an absolute path"})
 		} else {
 			add(filepath.Join(pixiHome, "envs"), pixiHomeVar, containerHint, true)
 		}
@@ -200,9 +188,7 @@ func knownHints(inputs knownInputs, roots []string, report *Report) []locationHi
 	}
 	if project := inputs.env[pixiProjectRootVar]; project != "" {
 		if !filepath.IsAbs(project) {
-			if roots == nil {
-				report.Issues = append(report.Issues, Issue{Path: pixiProjectRootVar, Error: "hint must be an absolute path"})
-			}
+			report.Issues = append(report.Issues, Issue{Path: pixiProjectRootVar, Error: "hint must be an absolute path"})
 		} else {
 			add(filepath.Join(project, ".pixi", "envs"), pixiProjectRootVar, containerHint, true)
 		}
@@ -267,19 +253,6 @@ func readRegistry(path string) ([]string, error) {
 	return paths, nil
 }
 
-func inScope(path string, roots []string) bool {
-	if roots == nil {
-		return true
-	}
-	for _, root := range roots {
-		rel, err := filepath.Rel(root, path)
-		if err == nil && rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
-}
-
 func safeHintDir(path string) (bool, error) {
 	for current := path; ; current = filepath.Dir(current) {
 		info, err := os.Lstat(current)
@@ -301,62 +274,55 @@ func safeHintDir(path string) (bool, error) {
 	}
 }
 
-func openHintDir(path string, roots []string) (*os.Root, error) {
-	if roots == nil {
+func openHintDir(path, root string) (*os.Root, error) {
+	if root == "" {
 		return os.OpenRoot(path)
 	}
-	for _, rootPath := range roots {
-		if !inScope(path, []string{rootPath}) {
-			continue
-		}
-		expected, err := os.Lstat(rootPath)
-		if err != nil {
-			return nil, err
-		}
-		if !expected.IsDir() {
-			return nil, fmt.Errorf("requested root is no longer a directory")
-		}
-		base, err := os.OpenRoot(rootPath)
-		if err != nil {
-			return nil, err
-		}
-		opened, err := base.Stat(".")
-		if err != nil || !os.SameFile(expected, opened) {
-			_ = base.Close()
-			return nil, fmt.Errorf("requested root changed during hint inspection")
-		}
-		rel, err := filepath.Rel(rootPath, path)
-		if err == nil {
-			var dir *os.Root
-			dir, err = base.OpenRoot(rel)
-			_ = base.Close()
-			if err != nil {
-				return nil, err
-			}
-			expected, err := os.Lstat(path)
-			if err == nil && !expected.IsDir() {
-				err = fmt.Errorf("hint is no longer a directory")
-			}
-			if err == nil {
-				var opened os.FileInfo
-				opened, err = dir.Stat(".")
-				if err == nil && !os.SameFile(expected, opened) {
-					err = fmt.Errorf("hint changed during inspection")
-				}
-			}
-			if err != nil {
-				_ = dir.Close()
-				return nil, err
-			}
-			return dir, nil
-		}
-		_ = base.Close()
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("hint outside requested roots")
+	}
+	expected, err := os.Lstat(root)
+	if err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("hint outside requested roots")
+	if !expected.IsDir() {
+		return nil, fmt.Errorf("requested root is no longer a directory")
+	}
+	base, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := base.Stat(".")
+	if err != nil || !os.SameFile(expected, opened) {
+		_ = base.Close()
+		return nil, fmt.Errorf("requested root changed during hint inspection")
+	}
+	var dir *os.Root
+	dir, err = base.OpenRoot(rel)
+	_ = base.Close()
+	if err != nil {
+		return nil, err
+	}
+	expected, err = os.Lstat(path)
+	if err == nil && !expected.IsDir() {
+		err = fmt.Errorf("hint is no longer a directory")
+	}
+	if err == nil {
+		var opened os.FileInfo
+		opened, err = dir.Stat(".")
+		if err == nil && !os.SameFile(expected, opened) {
+			err = fmt.Errorf("hint changed during inspection")
+		}
+	}
+	if err != nil {
+		_ = dir.Close()
+		return nil, err
+	}
+	return dir, nil
 }
 
-func probeKnownHints(results *condaResults, inputs knownInputs, roots []string) {
+func probeKnownHints(results *condaResults, inputs knownInputs) {
 	ctx := results.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -368,22 +334,16 @@ func probeKnownHints(results *condaResults, inputs knownInputs, roots []string) 
 	budget := maxHintCandidates
 	moreSkipped := 0
 	reportIssue := func(path string, err error) {
-		if roots == nil { // Full walks report their own errors and coverage gaps.
-			results.addIssue(path, err)
-		}
+		results.addIssue(path, err)
 	}
-	openDir := func(path string) (*os.Root, error) { return openHintDir(path, roots) }
-	for _, hint := range knownHints(inputs, roots, results.report) {
+	openDir := func(path string) (*os.Root, error) { return openHintDir(path, "") }
+	for _, hint := range knownHints(inputs, results.report) {
 		if ctx.Err() != nil {
 			break
 		}
 		container := hint.path
 		if hint.kind == rootHint {
 			container = filepath.Join(hint.path, "envs")
-		}
-		rootInScope := inScope(hint.path, roots)
-		if !rootInScope && (hint.kind != rootHint || !inScope(container, roots)) {
-			continue
 		}
 		summary := summaries[hint.source]
 		if summary == nil {
@@ -402,38 +362,34 @@ func probeKnownHints(results *condaResults, inputs knownInputs, roots []string) 
 			continue
 		}
 		budget--
-		checkedPath := hint.path
-		if !rootInScope {
-			checkedPath = container
-		}
-		ok, err := safeHintDir(checkedPath)
+		ok, err := safeHintDir(hint.path)
 		if err != nil {
-			reportIssue(checkedPath, err)
+			reportIssue(hint.path, err)
 			summary.Skipped++
 			continue
 		}
 		if !ok {
 			if hint.configured {
-				reportIssue(checkedPath, fmt.Errorf("configured location not found"))
+				reportIssue(hint.path, fmt.Errorf("configured location not found"))
 			}
 			summary.Skipped++
 			continue
 		}
 		summary.Checked++
-		if roots == nil && results.progress != nil {
+		if results.progress != nil {
 			results.progress.Folders.Add(1)
 		}
 		switch hint.kind {
 		case prefixHint:
-			probePrefix(results, hint.path, roots, &budget, seenPrefixes, reportIssue, openDir)
+			probePrefix(results, hint.path, &budget, seenPrefixes, reportIssue, openDir)
 		case rootHint:
-			probePrefix(results, hint.path, roots, &budget, seenPrefixes, reportIssue, openDir)
-			probeChildren(results, container, roots, &budget, seenPrefixes, seenContainers, reportIssue, openDir)
+			probePrefix(results, hint.path, &budget, seenPrefixes, reportIssue, openDir)
+			probeChildren(results, container, &budget, seenPrefixes, seenContainers, reportIssue, openDir)
 		case containerHint:
-			probeChildren(results, hint.path, roots, &budget, seenPrefixes, seenContainers, reportIssue, openDir)
+			probeChildren(results, hint.path, &budget, seenPrefixes, seenContainers, reportIssue, openDir)
 		}
 	}
-	if moreSkipped > 0 && roots == nil {
+	if moreSkipped > 0 {
 		reportIssue("known locations", fmt.Errorf("%d further location hints skipped after candidate limit", moreSkipped))
 	}
 	for _, summary := range summaries {
@@ -446,15 +402,12 @@ type locationHintKey struct {
 	path string
 }
 
-func probePrefix(results *condaResults, path string, roots []string, budget *int, seen map[string]bool, reportIssue func(string, error), openDir func(string) (*os.Root, error)) {
+func probePrefix(results *condaResults, path string, budget *int, seen map[string]bool, reportIssue func(string, error), openDir func(string) (*os.Root, error)) {
 	ctx := results.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if ctx.Err() != nil {
-		return
-	}
-	if !inScope(path, roots) {
 		return
 	}
 	if seen[path] {
@@ -490,10 +443,7 @@ func probePrefix(results *condaResults, path string, roots []string, budget *int
 	}
 }
 
-func probeChildren(results *condaResults, container string, roots []string, budget *int, seenPrefixes, seenContainers map[string]bool, reportIssue func(string, error), openDir func(string) (*os.Root, error)) {
-	if !inScope(container, roots) {
-		return
-	}
+func probeChildren(results *condaResults, container string, budget *int, seenPrefixes, seenContainers map[string]bool, reportIssue func(string, error), openDir func(string) (*os.Root, error)) {
 	if seenContainers[container] {
 		return
 	}
@@ -534,7 +484,7 @@ func probeChildren(results *condaResults, container string, roots []string, budg
 				reportIssue(container, fmt.Errorf("known-location limit of %d candidates reached", maxHintCandidates))
 				return
 			}
-			probePrefix(results, filepath.Join(container, entry.Name()), roots, budget, seenPrefixes, reportIssue, openDir)
+			probePrefix(results, filepath.Join(container, entry.Name()), budget, seenPrefixes, reportIssue, openDir)
 		}
 	}
 }

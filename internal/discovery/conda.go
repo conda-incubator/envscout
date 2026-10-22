@@ -63,35 +63,17 @@ type Progress struct {
 	Environments atomic.Uint64
 }
 
-// FindConda searches only explicitly requested directory roots without following symlinks.
-func FindConda(roots []string) (Report, error) {
-	return FindCondaWithProgress(roots, nil)
-}
-
 // FindCondaWithProgress reports live counters while searching requested roots.
 func FindCondaWithProgress(roots []string, progress *Progress) (Report, error) {
-	return findCondaWithHints(roots, progress, systemKnownInputs())
-}
-
-// FindCondaContext adds cancellation to the explicit walker; hints remain bounded.
-func FindCondaContext(ctx context.Context, roots []string, progress *Progress) (Report, error) {
-	return findCondaWithHintsContext(ctx, roots, progress, systemKnownInputs())
+	return walkConda(context.Background(), roots, progress, true)
 }
 
 // FindCondaFacts lets collectors omit history when no enabled rule requires it.
 func FindCondaFacts(ctx context.Context, roots []string, progress *Progress, readHistory bool) (Report, error) {
-	return walkConda(ctx, roots, progress, systemKnownInputs(), readHistory)
+	return walkConda(ctx, roots, progress, readHistory)
 }
 
-func findCondaWithHints(roots []string, progress *Progress, inputs knownInputs) (Report, error) {
-	return findCondaWithHintsContext(context.Background(), roots, progress, inputs)
-}
-
-func findCondaWithHintsContext(ctx context.Context, roots []string, progress *Progress, inputs knownInputs) (Report, error) {
-	return walkConda(ctx, roots, progress, inputs, true)
-}
-
-func walkConda(ctx context.Context, roots []string, progress *Progress, inputs knownInputs, readHistory bool) (Report, error) {
+func walkConda(ctx context.Context, roots []string, progress *Progress, readHistory bool) (Report, error) {
 	report := Report{Mode: ModeRoots, Roots: []string{}, Hints: []HintSummary{}, Environments: []Environment{}, Issues: []Issue{}}
 	if err := ctx.Err(); err != nil {
 		return report, err
@@ -133,7 +115,6 @@ func walkConda(ctx context.Context, roots []string, progress *Progress, inputs k
 	}
 
 	results := condaResults{report: &report, seen: make(map[string]bool), progress: progress, ctx: ctx, skipHistory: !readHistory}
-	probeKnownHints(&results, inputs, report.Roots)
 	for _, root := range walkRoots {
 		err := fastwalk.Walk(&fastwalk.Config{Follow: false, NumWorkers: 4}, root, func(path string, entry fs.DirEntry, walkErr error) error {
 			if err := ctx.Err(); err != nil {
@@ -154,7 +135,7 @@ func walkConda(ctx context.Context, roots []string, progress *Progress, inputs k
 				results.addIssue(path, err)
 				return fastwalk.SkipDir
 			}
-			prefix, err := openHintDir(filepath.Dir(path), []string{root})
+			prefix, err := openHintDir(filepath.Dir(path), root)
 			if err != nil {
 				results.addIssue(filepath.Dir(path), err)
 				return fastwalk.SkipDir
@@ -330,21 +311,8 @@ func validPackageMetadata(reader io.Reader) bool {
 	return json.NewDecoder(reader).Decode(&metadata) == nil && metadata.Name != "" && metadata.Version != ""
 }
 
-// revision mirrors conda.history.History.parse: revision is the zero-based
-// index of a history header, including headers with no package changes.
-func revision(path string) (*int, error) {
-	root, err := os.OpenRoot(filepath.Dir(path))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = root.Close() }()
-	return revisionInRoot(root, filepath.Base(path))
-}
-
-func revisionInRoot(root *os.Root, name string) (*int, error) {
-	return revisionInRootContext(context.Background(), root, name)
-}
-
+// revisionInRootContext mirrors conda.history.History.parse: revision is the
+// zero-based index of a history header, including headers with no package changes.
 func revisionInRootContext(ctx context.Context, root *os.Root, name string) (*int, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

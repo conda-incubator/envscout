@@ -9,8 +9,13 @@ import (
 )
 
 const (
-	SchemaVersion  = 1
-	RulesetVersion = "1"
+	// ConfigVersion is the version of the --config policy file format; unchanged since 1.
+	ConfigVersion = 1
+	// SchemaVersion is the version of the JSON lint report; 2 removed Finding.related_findings and Finding.contextual.
+	SchemaVersion = 2
+	// RulesetVersion is the version of the rule set; 2 removed IC005.
+	RulesetVersion = "2"
+	// ProfileVersion is the version of the lint profile set.
 	ProfileVersion = "1"
 	MaxSamples     = 20
 	MaxFindings    = 5000
@@ -88,21 +93,19 @@ type FindingEvidence struct {
 }
 
 type Finding struct {
-	RuleID          string          `json:"rule_id"`
-	RuleVersion     string          `json:"rule_version"`
-	Target          string          `json:"target"`
-	Severity        string          `json:"severity"`
-	Confidence      string          `json:"confidence"`
-	Category        string          `json:"category"`
-	Message         string          `json:"message"`
-	Evidence        FindingEvidence `json:"evidence"`
-	Recommendation  string          `json:"recommendation"`
-	References      []string        `json:"references"`
-	Fingerprint     string          `json:"fingerprint"`
-	RelatedFindings []string        `json:"related_findings"`
-	Suppression     *Suppression    `json:"suppression,omitempty"`
-	Contextual      bool            `json:"contextual"`
-	paths           []string
+	RuleID         string          `json:"rule_id"`
+	RuleVersion    string          `json:"rule_version"`
+	Target         string          `json:"target"`
+	Severity       string          `json:"severity"`
+	Confidence     string          `json:"confidence"`
+	Category       string          `json:"category"`
+	Message        string          `json:"message"`
+	Evidence       FindingEvidence `json:"evidence"`
+	Recommendation string          `json:"recommendation"`
+	References     []string        `json:"references"`
+	Fingerprint    string          `json:"fingerprint"`
+	Suppression    *Suppression    `json:"suppression,omitempty"`
+	paths          []string
 }
 
 type SuppressionNote struct {
@@ -164,7 +167,7 @@ func (r Report) ExitCode() int {
 		threshold = severityRank("warning")
 	}
 	for _, f := range r.Findings {
-		if f.Suppression == nil && !f.Contextual && severityRank(f.Severity) >= threshold {
+		if f.Suppression == nil && severityRank(f.Severity) >= threshold {
 			return 1
 		}
 	}

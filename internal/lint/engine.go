@@ -19,7 +19,7 @@ import (
 // defaults. It performs no collection and does not modify its inputs.
 func BuildPolicy(config Policy, options Options) (Policy, error) {
 	if config.Version == 0 {
-		config.Version = SchemaVersion
+		config.Version = ConfigVersion
 	}
 	if err := ValidateConfig(config); err != nil {
 		return Policy{}, err
@@ -60,7 +60,7 @@ func BuildPolicy(config Policy, options Options) (Policy, error) {
 	if failOn != "none" && severityRank(failOn) == 0 {
 		return Policy{}, fmt.Errorf("invalid lint failure threshold %q", failOn)
 	}
-	p := Policy{Version: SchemaVersion, Source: source, Profile: profile, FailOn: failOn,
+	p := Policy{Version: ConfigVersion, Source: source, Profile: profile, FailOn: failOn,
 		Rules: make(map[string]RuleOptions, len(registry)), Suppressions: slices.Clone(config.Suppressions)}
 	for i := range p.Suppressions {
 		p.Suppressions[i].Fingerprint = strings.ToLower(p.Suppressions[i].Fingerprint)
@@ -68,9 +68,6 @@ func BuildPolicy(config Policy, options Options) (Policy, error) {
 	if options.RuntimePrefix != "" {
 		if source != "oci-archive" {
 			return Policy{}, fmt.Errorf("runtime prefix requires an OCI image source")
-		}
-		if err := validateConfigString("runtime prefix", options.RuntimePrefix); err != nil {
-			return Policy{}, err
 		}
 		if !path.IsAbs(options.RuntimePrefix) || strings.Contains(options.RuntimePrefix, "\\") {
 			return Policy{}, fmt.Errorf("runtime prefix must be an absolute image POSIX path")
@@ -85,9 +82,6 @@ func BuildPolicy(config Policy, options Options) (Policy, error) {
 	if options.Project != "" {
 		if source != "dir" {
 			return Policy{}, fmt.Errorf("project association requires a local project path")
-		}
-		if err := validateConfigString("project", options.Project); err != nil {
-			return Policy{}, err
 		}
 		project, err := filepath.Abs(options.Project)
 		if err != nil {
@@ -268,13 +262,8 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 			Roots: roots, Image: target.Image, PrefixCount: len(target.Prefixes), RuntimePrefix: target.RuntimePrefix,
 			Coverage: coverage, Issues: issues})
 		r.Issues = append(r.Issues, issues...)
-		primary := []Finding{}
 		for _, rule := range registry {
-			if rule.ID == "IC005" {
-				continue
-			}
 			outcome, findings := evaluateRule(target, policy, rule)
-			primary = append(primary, findings...)
 			r.Outcomes = append(r.Outcomes, outcome)
 			for _, f := range findings {
 				if len(r.Findings) < MaxFindings {
@@ -284,23 +273,6 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 				}
 			}
 		}
-		rule, _ := lookupRule("IC005")
-		outcome, contextual := evaluateRule(target, policy, rule)
-		for i := range contextual {
-			for _, f := range primary {
-				if strings.HasPrefix(f.RuleID, "IC") {
-					contextual[i].RelatedFindings = append(contextual[i].RelatedFindings, f.Fingerprint)
-				}
-			}
-			slices.Sort(contextual[i].RelatedFindings)
-			contextual[i].RelatedFindings = sampleStrings(contextual[i].RelatedFindings)
-			if len(r.Findings) < MaxFindings {
-				r.Findings = append(r.Findings, contextual[i])
-			} else {
-				truncated = true
-			}
-		}
-		r.Outcomes = append(r.Outcomes, outcome)
 	}
 	if truncated {
 		r.Issues = append(r.Issues, evidence.Issue{Capability: "evaluation", Message: fmt.Sprintf("finding limit %d exceeded; report is truncated", MaxFindings)})

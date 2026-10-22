@@ -61,7 +61,7 @@ func TestFindCondaMissingHistory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(`{"name":"pkg","version":"1"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	report, err := FindConda([]string{root})
+	report, err := FindCondaWithProgress([]string{root}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,11 +76,11 @@ func TestFindCondaRejectsNonDirectoryRoot(t *testing.T) {
 	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := FindConda([]string{path}); err == nil {
+	if _, err := FindCondaWithProgress([]string{path}, nil); err == nil {
 		t.Fatal("expected non-directory root to fail")
 	}
 	if err := os.Symlink(root, filepath.Join(root, "link")); err == nil {
-		if _, err := FindConda([]string{filepath.Join(root, "link")}); err == nil {
+		if _, err := FindCondaWithProgress([]string{filepath.Join(root, "link")}, nil); err == nil {
 			t.Fatal("expected symlink root to fail")
 		}
 	}
@@ -100,11 +100,7 @@ func TestRevision(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "history")
-			if err := os.WriteFile(path, []byte(tt.data), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			got, err := revision(path)
+			got, err := revisionFromReader(strings.NewReader(tt.data))
 			if err != nil || (got == nil) != (tt.want == nil) || (got != nil && *got != *tt.want) {
 				t.Fatalf("revision = %v, %v; want %v", got, err, tt.want)
 			}

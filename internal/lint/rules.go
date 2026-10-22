@@ -172,35 +172,6 @@ func evaluateRule(target evidence.Target, policy Policy, rule Rule) (Outcome, []
 		} else if !complete("prefixes") || !complete("tooling-prefix") || !complete("runtime-config") {
 			unknown("prefix roles or runtime configuration could not be completely inspected")
 		}
-	case "IC005":
-		outcome.SubjectCount = 1
-		if policy.Profile != "container-runtime" && policy.Profile != "container-distroless" {
-			outcome.Status, outcome.Reason = NotApplicable, "contextual runtime-stage review requires declared runtime intent"
-			break
-		}
-		tooling, apps := prefixRoles(target)
-		if len(target.Archives)+len(target.Extracted)+len(target.Tools) == 0 && (len(tooling) == 0 || len(apps) == 0) {
-			if !complete("final-cache") || !complete("os-package-tools") || !complete("prefixes") || !complete("tooling-prefix") || !complete("runtime-config") {
-				unknown("required contextual cache, tooling or runtime observations are incomplete")
-			}
-			break
-		}
-		paths := append(slices.Clone(tooling), apps...)
-		for _, artifacts := range [][]evidence.Artifact{target.Archives, target.Extracted, target.Tools} {
-			for _, artifact := range artifacts {
-				paths = append(paths, artifact.Path)
-			}
-		}
-		f := newFinding(target, rule, "info", "medium", paths, nil)
-		f.Contextual = true
-		f.Evidence.ToolingPrefixes = sampleStrings(tooling)
-		f.Evidence.AppPrefixes = sampleStrings(apps)
-		f.Evidence.RuntimePrefix = target.RuntimePrefix
-		f.Evidence.RuntimeUsesTooling = target.RuntimeUsesTooling
-		f.Evidence.Count = 1
-		f.Message = "Observed runtime-image cache or tooling facts warrant a compatible runtime-stage review."
-		f.Recommendation = "Consider a tested compatible runtime or distroless stage while preserving OS/architecture, libc, required libraries, activation, prefix relocation and scanner metadata. These artifact facts do not prove a missing multi-stage build or justify scratch, Alpine, arbitrary file removal, size-savings or CVE predictions. This contextual recommendation does not independently count toward policy failure."
-		findings = append(findings, f)
 	}
 	if len(findings) > 0 {
 		outcome.Status = FindingStatus
@@ -299,7 +270,7 @@ func newFinding(target evidence.Target, rule Rule, severity, confidence string, 
 	digest := sha256.Sum256(identity)
 	f := Finding{RuleID: rule.ID, RuleVersion: rule.Version, Target: target.ID, Severity: severity,
 		Confidence: confidence, Category: rule.Category, References: slices.Clone(rule.References),
-		Fingerprint: hex.EncodeToString(digest[:]), RelatedFindings: []string{}, paths: paths,
+		Fingerprint: hex.EncodeToString(digest[:]), paths: paths,
 		Evidence: FindingEvidence{Paths: sampleStrings(paths), Locations: []string{}, Samples: []evidence.Artifact{}, Count: len(all), PayloadBytes: bytes}}
 	for _, p := range f.Evidence.Paths {
 		f.Evidence.Locations = append(f.Evidence.Locations, location(target, p))

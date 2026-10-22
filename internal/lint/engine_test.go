@@ -50,6 +50,20 @@ func engineOutcome(t *testing.T, report Report, rule string) Outcome {
 	return Outcome{}
 }
 
+func TestReportAndPolicyVersions(t *testing.T) {
+	p, err := BuildPolicy(Policy{}, Options{Source: "oci-archive", Profile: "container-runtime"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Version != ConfigVersion {
+		t.Fatalf("BuildPolicy version = %d, want %d", p.Version, ConfigVersion)
+	}
+	report := engineEvaluate(engineTarget("oci-archive"), p)
+	if report.SchemaVersion != SchemaVersion || report.RulesetVersion != RulesetVersion {
+		t.Fatalf("report versions = %d/%q, want %d/%q", report.SchemaVersion, report.RulesetVersion, SchemaVersion, RulesetVersion)
+	}
+}
+
 func TestBuildPolicyPrecedenceAndSelection(t *testing.T) {
 	config := Policy{Version: 1, Profile: "container-runtime", FailOn: "error", Rules: map[string]RuleOptions{
 		"IC006": {Enabled: engineBool(false), Severity: "error"},
@@ -59,7 +73,7 @@ func TestBuildPolicyPrecedenceAndSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Profile != "container-development" || p.FailOn != "info" || len(p.Rules) != 11 || p.Source != "oci-archive" {
+	if p.Profile != "container-development" || p.FailOn != "info" || len(p.Rules) != 10 || p.Source != "oci-archive" {
 		t.Fatalf("bad effective policy: %+v", p)
 	}
 	for id, options := range p.Rules {
@@ -133,7 +147,7 @@ func TestRequirementsUnionAndDisabledCollectors(t *testing.T) {
 	if got := Requirements(p).Capabilities; !reflect.DeepEqual(got, want) {
 		t.Fatalf("requirements %v, want %v", got, want)
 	}
-	p, err := BuildPolicy(Policy{}, Options{Source: "oci-archive", Profile: "container-runtime", DisableRules: []string{"IC004", "IC005", "IC003", "IC002"}})
+	p, err := BuildPolicy(Policy{}, Options{Source: "oci-archive", Profile: "container-runtime", DisableRules: []string{"IC004", "IC003", "IC002"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +162,8 @@ func TestRequirementsUnionAndDisabledCollectors(t *testing.T) {
 		t.Fatal("profile did not disclose unavailable provider")
 	}
 	for _, rule := range ListRules() {
-		if !rule.Available || rule.ID == "EC002" || rule.ID == "EC003" || len(rule.Defaults) != 5 {
-			t.Fatalf("bad implemented rule listing: %+v", rule)
+		if rule.Available == (rule.ID == "EC002" || rule.ID == "EC003") || len(rule.Defaults) != 5 {
+			t.Fatalf("bad rule listing: %+v", rule)
 		}
 	}
 	listed := ListRules()
@@ -343,7 +357,7 @@ func TestPolicySeverityOverridesConservativeDefaults(t *testing.T) {
 }
 
 func TestRuntimeCoverageControlsAbsenceOutcomes(t *testing.T) {
-	for _, rule := range []string{"IC003", "IC005"} {
+	for _, rule := range []string{"IC003"} {
 		for _, coverage := range []string{evidence.Complete, evidence.Partial, evidence.NotCollected} {
 			for _, nested := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/%s/nested=%t", rule, coverage, nested), func(t *testing.T) {
@@ -368,26 +382,6 @@ func TestRuntimeCoverageControlsAbsenceOutcomes(t *testing.T) {
 				})
 			}
 		}
-	}
-}
-
-func TestContextualRuleDoesNotMultiplyFailures(t *testing.T) {
-	target := engineTarget("oci-archive")
-	target.Archives = []evidence.Artifact{{Path: "/cache/pkg.conda", Bytes: 50}}
-	p := enginePolicy(t, "oci-archive", "container-runtime", "IC005")
-	p.FailOn = "info"
-	report := engineEvaluate(target, p)
-	if len(report.Findings) != 1 || !report.Findings[0].Contextual || report.Findings[0].Evidence.PayloadBytes != 0 || report.ExitCode() != 0 {
-		t.Fatalf("contextual outcome %+v", report)
-	}
-	p = enginePolicy(t, "oci-archive", "container-runtime", "IC001", "IC005")
-	report = engineEvaluate(target, p)
-	if len(report.Findings) != 2 || len(report.Findings[1].RelatedFindings) != 1 || report.Findings[1].RelatedFindings[0] != report.Findings[0].Fingerprint {
-		t.Fatalf("primary context linkage %+v", report.Findings)
-	}
-	p = enginePolicy(t, "oci-archive", "container-development", "IC005")
-	if outcome := engineOutcome(t, engineEvaluate(target, p), "IC005"); outcome.Status != NotApplicable {
-		t.Fatalf("development runtime inference: %+v", outcome)
 	}
 }
 
