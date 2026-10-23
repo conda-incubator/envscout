@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anaconda/envscout/internal/discovery"
+	"github.com/conda-incubator/envscout/internal/discovery"
 )
 
 func TestFilename(t *testing.T) {

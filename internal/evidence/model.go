@@ -4,7 +4,7 @@ package evidence
 import (
 	"time"
 
-	"github.com/anaconda/envscout/internal/imageinput"
+	"github.com/conda-incubator/envscout/internal/imageinput"
 )
 
 const (

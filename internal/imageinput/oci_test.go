@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anaconda/envscout/internal/testimage"
+	"github.com/conda-incubator/envscout/internal/testimage"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 

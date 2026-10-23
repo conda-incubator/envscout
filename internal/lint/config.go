@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -16,13 +16,14 @@ const (
 	maxConfigBytes        = 1 << 20
 	maxConfigRules        = 32
 	maxConfigSuppressions = 256
+	maxRevisionThreshold  = 1_000_000
 )
 
 // Policy contains explicit configuration overrides, before profile and CLI merging.
 type Policy struct {
 	Version      int                    `json:"version"`
 	Profile      string                 `json:"profile,omitempty"`
-	FailOn       string                 `json:"fail_on,omitempty"`
+	FailOn       Severity               `json:"fail_on,omitempty"`
 	Rules        map[string]RuleOptions `json:"rules,omitempty"`
 	Suppressions []Suppression          `json:"suppressions,omitempty"`
 	// Execution inputs are set by the engine and cannot be supplied in config JSON.
@@ -32,9 +33,9 @@ type Policy struct {
 }
 
 type RuleOptions struct {
-	Enabled           *bool  `json:"enabled,omitempty"`
-	Severity          string `json:"severity,omitempty"`
-	RevisionThreshold *int   `json:"revision_threshold,omitempty"`
+	Enabled           *bool    `json:"enabled,omitempty"`
+	Severity          Severity `json:"severity,omitempty"`
+	RevisionThreshold *int     `json:"revision_threshold,omitempty"`
 }
 
 type Suppression struct {
@@ -44,12 +45,6 @@ type Suppression struct {
 	Fingerprint string `json:"fingerprint,omitempty"`
 	Reason      string `json:"reason"`
 	Expires     string `json:"expires,omitempty"`
-}
-
-var configRuleIDs = map[string]struct{}{
-	"EC001": {}, "EC002": {}, "EC003": {}, "EC004": {},
-	"IC001": {}, "IC002": {}, "IC003": {}, "IC004": {},
-	"IC006": {}, "IC007": {},
 }
 
 // ReadConfig reads one bounded regular JSON file. It never reads targets.
@@ -100,63 +95,65 @@ func ValidateConfig(policy Policy) error {
 	if len(policy.Suppressions) > maxConfigSuppressions {
 		return fmt.Errorf("suppressions exceed the limit of %d", maxConfigSuppressions)
 	}
-	switch policy.Profile {
-	case "", "local", "container", "container-runtime", "container-distroless", "container-development":
-	default:
+	if policy.Profile != "" && !slices.Contains(profiles, policy.Profile) {
 		return fmt.Errorf("unknown profile %q", policy.Profile)
 	}
-	switch policy.FailOn {
-	case "", "none", "info", "warning", "error":
-	default:
+	if policy.FailOn != "" && policy.FailOn != NoFailure && !policy.FailOn.Valid() {
 		return fmt.Errorf("invalid fail_on %q", policy.FailOn)
 	}
 	ids := make([]string, 0, len(policy.Rules))
 	for id := range policy.Rules {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	for _, id := range ids {
-		if _, ok := configRuleIDs[id]; !ok {
+		rule, ok := lookupRule(id)
+		if !ok {
 			return fmt.Errorf("unknown rule ID %q", id)
 		}
 		options := policy.Rules[id]
-		switch options.Severity {
-		case "", "info", "warning", "error":
-		default:
+		if options.Severity != "" && !options.Severity.Valid() {
 			return fmt.Errorf("invalid severity %q for rule %q", options.Severity, id)
 		}
 		if options.RevisionThreshold != nil {
-			if id != "EC001" {
-				return fmt.Errorf("revision_threshold is only supported for EC001, not %q", id)
+			if !rule.SupportsRevisionThreshold {
+				return fmt.Errorf("revision_threshold is only supported for rules with a revision threshold, not %q", id)
 			}
-			if *options.RevisionThreshold <= 0 || *options.RevisionThreshold > 1_000_000 {
-				return fmt.Errorf("EC001 revision_threshold must be between 1 and 1000000")
+			if *options.RevisionThreshold <= 0 || *options.RevisionThreshold > maxRevisionThreshold {
+				return fmt.Errorf("%s revision_threshold must be between 1 and %d", id, maxRevisionThreshold)
 			}
 		}
 	}
 	for i, suppression := range policy.Suppressions {
-		if _, ok := configRuleIDs[suppression.Rule]; !ok {
-			return fmt.Errorf("suppression %d: unknown rule ID %q", i+1, suppression.Rule)
+		if err := validateSuppression(suppression); err != nil {
+			return fmt.Errorf("suppression %d: %w", i+1, err)
 		}
-		if strings.TrimSpace(suppression.Reason) == "" {
-			return fmt.Errorf("suppression %d: reason is required", i+1)
+	}
+	return nil
+}
+
+func validateSuppression(suppression Suppression) error {
+	if _, ok := lookupRule(suppression.Rule); !ok {
+		return fmt.Errorf("unknown rule ID %q", suppression.Rule)
+	}
+	if strings.TrimSpace(suppression.Reason) == "" {
+		return fmt.Errorf("reason is required")
+	}
+	if suppression.Target == "" && suppression.Path == "" && suppression.Fingerprint == "" {
+		return fmt.Errorf("target, path or fingerprint is required")
+	}
+	if suppression.Fingerprint != "" {
+		if len(suppression.Fingerprint) != 64 {
+			return fmt.Errorf("fingerprint must be a 64-character SHA256 hex digest")
 		}
-		if suppression.Target == "" && suppression.Path == "" && suppression.Fingerprint == "" {
-			return fmt.Errorf("suppression %d: target, path or fingerprint is required", i+1)
+		if _, err := hex.DecodeString(suppression.Fingerprint); err != nil {
+			return fmt.Errorf("fingerprint must be a 64-character SHA256 hex digest")
 		}
-		if suppression.Fingerprint != "" {
-			if len(suppression.Fingerprint) != 64 {
-				return fmt.Errorf("suppression %d: fingerprint must be a 64-character SHA256 hex digest", i+1)
-			}
-			if _, err := hex.DecodeString(suppression.Fingerprint); err != nil {
-				return fmt.Errorf("suppression %d: fingerprint must be a 64-character SHA256 hex digest", i+1)
-			}
-		}
-		if suppression.Expires != "" {
-			expires, err := time.Parse(time.DateOnly, suppression.Expires)
-			if err != nil || expires.Format(time.DateOnly) != suppression.Expires {
-				return fmt.Errorf("suppression %d: expires must be a valid UTC date in yyyy-mm-dd format", i+1)
-			}
+	}
+	if suppression.Expires != "" {
+		expires, err := time.Parse(time.DateOnly, suppression.Expires)
+		if err != nil || expires.Format(time.DateOnly) != suppression.Expires {
+			return fmt.Errorf("expires must be a valid UTC date in yyyy-mm-dd format")
 		}
 	}
 	return nil

@@ -1,4 +1,4 @@
-module github.com/anaconda/envscout
+module github.com/conda-incubator/envscout
 
 go 1.26.8
 

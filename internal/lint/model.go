@@ -4,29 +4,66 @@ package lint
 import (
 	"time"
 
-	"github.com/anaconda/envscout/internal/evidence"
-	"github.com/anaconda/envscout/internal/imageinput"
+	"github.com/conda-incubator/envscout/internal/evidence"
+	"github.com/conda-incubator/envscout/internal/imageinput"
 )
 
 const (
 	// ConfigVersion is the version of the --config policy file format; unchanged since 1.
 	ConfigVersion = 1
-	// SchemaVersion is the version of the JSON lint report; 2 removed Finding.related_findings and Finding.contextual.
-	SchemaVersion = 2
+	// SchemaVersion is the version of the JSON lint report. 3 removed derived
+	// per-finding metadata and duplicate outcome fingerprint lists in favor of
+	// rule metadata and findings keyed by target/rule, and compacted outcomes.
+	SchemaVersion = 3
 	// RulesetVersion is the version of the rule set; 2 removed IC005.
 	RulesetVersion = "2"
 	// ProfileVersion is the version of the lint profile set.
 	ProfileVersion = "1"
 	MaxSamples     = 20
 	MaxFindings    = 5000
+)
 
-	Pass          = "pass"
-	FindingStatus = "finding"
-	Unknown       = "unknown"
-	NotApplicable = "not_applicable"
-	Disabled      = "disabled"
-	Unavailable   = "unavailable"
-	Suppressed    = "suppressed"
+// Severity is the severity of a finding or a configured rule. NoFailure is a
+// failure-threshold value only and is never a finding severity.
+type Severity string
+
+const (
+	Info      Severity = "info"
+	Warning   Severity = "warning"
+	Error     Severity = "error"
+	NoFailure Severity = "none"
+)
+
+// Rank orders severities for threshold comparisons. Unknown and blank values
+// and NoFailure rank 0.
+func (s Severity) Rank() int {
+	switch s {
+	case Info:
+		return 1
+	case Warning:
+		return 2
+	case Error:
+		return 3
+	}
+	return 0
+}
+
+// Valid reports whether s is a finding severity (info, warning or error).
+func (s Severity) Valid() bool {
+	return s == Info || s == Warning || s == Error
+}
+
+// Status is the evaluation outcome of one rule against one target.
+type Status string
+
+const (
+	Pass          Status = "pass"
+	FindingStatus Status = "finding"
+	Unknown       Status = "unknown"
+	NotApplicable Status = "not_applicable"
+	Disabled      Status = "disabled"
+	Unavailable   Status = "unavailable"
+	Suppressed    Status = "suppressed"
 )
 
 // Empty scalar options mean the CLI did not explicitly set that option.
@@ -41,34 +78,40 @@ type Options struct {
 }
 
 type RuleDefault struct {
-	Enabled           bool   `json:"enabled"`
-	Severity          string `json:"severity"`
-	RevisionThreshold *int   `json:"revision_threshold,omitempty"`
+	Enabled           bool     `json:"enabled"`
+	Severity          Severity `json:"severity"`
+	RevisionThreshold *int     `json:"revision_threshold,omitempty"`
 }
 
+// Rule is the immutable metadata and evaluation entry for one lint rule.
+// Check is nil only for unavailable design entries.
 type Rule struct {
 	ID                string                 `json:"id"`
 	Version           string                 `json:"version"`
 	Name              string                 `json:"name"`
-	Description       string                 `json:"description"`
 	Category          string                 `json:"category"`
+	Description       string                 `json:"description"`
 	TargetKinds       []string               `json:"target_kinds"`
 	Capabilities      []string               `json:"capabilities"`
 	Defaults          map[string]RuleDefault `json:"profile_defaults"`
 	Available         bool                   `json:"available"`
 	UnavailableReason string                 `json:"unavailable_reason,omitempty"`
+	Confidence        string                 `json:"confidence,omitempty"`
+	Fix               string                 `json:"recommendation,omitempty"`
 	References        []string               `json:"references"`
 	Exceptions        []string               `json:"known_exceptions"`
+	// SupportsRevisionThreshold is true only for rules whose option set accepts a revision threshold.
+	SupportsRevisionThreshold bool `json:"-"`
+	// Check returns the rule's observation; the engine supplies target/ID/status.
+	Check func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding) `json:"-"`
 }
 
 type Outcome struct {
-	RuleID       string   `json:"rule_id"`
-	RuleVersion  string   `json:"rule_version"`
-	Target       string   `json:"target"`
-	Status       string   `json:"status"`
-	Reason       string   `json:"reason,omitempty"`
-	SubjectCount int      `json:"subject_count"`
-	Findings     []string `json:"findings"`
+	RuleID       string `json:"rule_id"`
+	Target       string `json:"target"`
+	Status       Status `json:"status"`
+	Reason       string `json:"reason,omitempty"`
+	SubjectCount int    `json:"subject_count"`
 }
 
 // Evidence samples are bounded; Count and PayloadBytes describe all observed
@@ -92,20 +135,17 @@ type FindingEvidence struct {
 	Notes              []string            `json:"notes,omitempty"`
 }
 
+// Finding carries only per-instance data. Rule metadata (version, confidence,
+// category, references, recommendation) is available via LookupRule(RuleID).
 type Finding struct {
-	RuleID         string          `json:"rule_id"`
-	RuleVersion    string          `json:"rule_version"`
-	Target         string          `json:"target"`
-	Severity       string          `json:"severity"`
-	Confidence     string          `json:"confidence"`
-	Category       string          `json:"category"`
-	Message        string          `json:"message"`
-	Evidence       FindingEvidence `json:"evidence"`
-	Recommendation string          `json:"recommendation"`
-	References     []string        `json:"references"`
-	Fingerprint    string          `json:"fingerprint"`
-	Suppression    *Suppression    `json:"suppression,omitempty"`
-	paths          []string
+	RuleID      string          `json:"rule_id"`
+	Target      string          `json:"target"`
+	Severity    Severity        `json:"severity"`
+	Message     string          `json:"message"`
+	Evidence    FindingEvidence `json:"evidence"`
+	Fingerprint string          `json:"fingerprint"`
+	Suppression *Suppression    `json:"suppression,omitempty"`
+	paths       []string
 }
 
 type SuppressionNote struct {
@@ -143,6 +183,7 @@ type Report struct {
 	Policy           Policy            `json:"policy"`
 	Targets          []TargetReport    `json:"targets"`
 	Outcomes         []Outcome         `json:"outcomes"`
+	OutcomeCounts    map[Status]int    `json:"outcome_counts"`
 	Findings         []Finding         `json:"findings"`
 	Issues           []evidence.Issue  `json:"issues"`
 	SuppressionNotes []SuppressionNote `json:"suppression_notes"`
@@ -155,33 +196,23 @@ type ReportLimits struct {
 	Findings        int `json:"findings"`
 }
 
+// ExitCode returns 2 for an incomplete or failed evaluation, 1 when an
+// unsuppressed finding meets the fail-on threshold, and 0 otherwise.
 func (r Report) ExitCode() int {
 	if r.Status != "completed" {
 		return 2
 	}
-	if r.Policy.FailOn == "none" {
+	if r.Policy.FailOn == NoFailure {
 		return 0
 	}
-	threshold := severityRank(r.Policy.FailOn)
+	threshold := r.Policy.FailOn.Rank()
 	if threshold == 0 {
-		threshold = severityRank("warning")
+		threshold = Warning.Rank()
 	}
 	for _, f := range r.Findings {
-		if f.Suppression == nil && severityRank(f.Severity) >= threshold {
+		if f.Suppression == nil && f.Severity.Rank() >= threshold {
 			return 1
 		}
-	}
-	return 0
-}
-
-func severityRank(severity string) int {
-	switch severity {
-	case "info":
-		return 1
-	case "warning":
-		return 2
-	case "error":
-		return 3
 	}
 	return 0
 }

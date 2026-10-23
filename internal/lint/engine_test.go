@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anaconda/envscout/internal/evidence"
+	"github.com/conda-incubator/envscout/internal/evidence"
 )
 
 func engineBool(value bool) *bool { return &value }
@@ -62,18 +62,21 @@ func TestReportAndPolicyVersions(t *testing.T) {
 	if report.SchemaVersion != SchemaVersion || report.RulesetVersion != RulesetVersion {
 		t.Fatalf("report versions = %d/%q, want %d/%q", report.SchemaVersion, report.RulesetVersion, SchemaVersion, RulesetVersion)
 	}
+	if SchemaVersion != 3 || ConfigVersion != 1 || RulesetVersion != "2" || ProfileVersion != "1" {
+		t.Fatal("wire version constants changed")
+	}
 }
 
 func TestBuildPolicyPrecedenceAndSelection(t *testing.T) {
-	config := Policy{Version: 1, Profile: "container-runtime", FailOn: "error", Rules: map[string]RuleOptions{
-		"IC006": {Enabled: engineBool(false), Severity: "error"},
-		"EC001": {Severity: "warning", RevisionThreshold: engineInt(12)},
+	config := Policy{Version: 1, Profile: "container-runtime", FailOn: Error, Rules: map[string]RuleOptions{
+		"IC006": {Enabled: engineBool(false), Severity: Error},
+		"EC001": {Severity: Warning, RevisionThreshold: engineInt(12)},
 	}}
 	p, err := BuildPolicy(config, Options{Source: "oci-archive", Profile: "container-development", FailOn: "info", Rules: []string{"IC006", "EC001"}, DisableRules: []string{"IC001"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Profile != "container-development" || p.FailOn != "info" || len(p.Rules) != 10 || p.Source != "oci-archive" {
+	if p.Profile != "container-development" || p.FailOn != Info || len(p.Rules) != len(registry) || p.Source != "oci-archive" {
 		t.Fatalf("bad effective policy: %+v", p)
 	}
 	for id, options := range p.Rules {
@@ -81,16 +84,17 @@ func TestBuildPolicyPrecedenceAndSelection(t *testing.T) {
 			t.Fatalf("bad normalized rule %s: %+v", id, options)
 		}
 	}
-	if p.Rules["IC006"].Severity != "error" || *p.Rules["EC001"].RevisionThreshold != 12 {
+	if p.Rules["IC006"].Severity != Error || *p.Rules["EC001"].RevisionThreshold != 12 {
 		t.Fatal("config rule overrides lost")
 	}
 	*p.Rules["EC001"].RevisionThreshold = 30
 	if *config.Rules["EC001"].RevisionThreshold != 12 {
 		t.Fatal("input policy mutated")
 	}
-	for _, tc := range []struct{ source, profile, fail string }{
-		{"dir", "local", "warning"}, {"oci-archive", "container", "warning"},
-	} {
+	for _, tc := range []struct {
+		source, profile string
+		fail            Severity
+	}{{"dir", "local", Warning}, {"oci-archive", "container", Warning}} {
 		p := enginePolicy(t, tc.source, "")
 		if p.Profile != tc.profile || p.FailOn != tc.fail {
 			t.Fatalf("source defaults: %+v", p)
@@ -161,7 +165,7 @@ func TestBuildPolicyRuntimePrefixIsExactAndClean(t *testing.T) {
 	}
 }
 
-func TestBuildPolicyRuntimePrefixDoesNotMutateConfig(t *testing.T) {
+func TestBuildPolicyDoesNotMutateConfig(t *testing.T) {
 	config := Policy{Version: ConfigVersion, Rules: map[string]RuleOptions{"IC001": {Enabled: engineBool(false)}}}
 	before := config.Rules["IC001"]
 	if _, err := BuildPolicy(config, Options{Source: "oci-archive", RuntimePrefix: "/opt/app"}); err != nil {
@@ -189,8 +193,8 @@ func TestRequirementsUnionAndDisabledCollectors(t *testing.T) {
 	if caps := Requirements(p).Capabilities; slices.Contains(caps, "installed-lock") || slices.Contains(caps, "manifest-lock") {
 		t.Fatalf("unavailable providers requested: %v", caps)
 	}
-	if engineOutcome(t, engineEvaluate(engineTarget("dir"), p), "EC002").Status != Unavailable {
-		t.Fatal("profile did not disclose unavailable provider")
+	if report := engineEvaluate(engineTarget("dir"), p); report.OutcomeCounts[Unavailable] != 2 || engineOutcome(t, report, "EC002").Status != Unavailable {
+		t.Fatal("profile did not disclose unavailable providers")
 	}
 	for _, rule := range ListRules() {
 		if rule.Available == (rule.ID == "EC002" || rule.ID == "EC003") || len(rule.Defaults) != 5 {
@@ -212,12 +216,48 @@ func TestRequirementsUnionAndDisabledCollectors(t *testing.T) {
 	}
 }
 
+func engineHasOutcome(report Report, rule string) bool {
+	for _, outcome := range report.Outcomes {
+		if outcome.RuleID == rule {
+			return true
+		}
+	}
+	return false
+}
+
+func TestInactiveOutcomesAreCountedNotExpanded(t *testing.T) {
+	p := enginePolicy(t, "dir", "local", "EC001")
+	target := engineTarget("dir")
+	target.Prefixes = []evidence.Prefix{{Path: "/environment", Revision: new(0)}}
+	report := engineEvaluate(target, p)
+	if len(report.Outcomes) != 1 || report.Outcomes[0].RuleID != "EC001" {
+		t.Fatalf("inactive rules expanded into outcomes: %+v", report.Outcomes)
+	}
+	if report.OutcomeCounts[Pass] != 1 || report.OutcomeCounts[Disabled] != len(registry)-1 {
+		t.Fatalf("inactive outcomes not counted: %+v", report.OutcomeCounts)
+	}
+	total := 0
+	for _, n := range report.OutcomeCounts {
+		total += n
+	}
+	if total != len(registry) {
+		t.Fatalf("counts total %d, want %d", total, len(registry))
+	}
+	if len(report.OutcomeCounts) != 7 {
+		t.Fatalf("summary must include all seven statuses, got %v", report.OutcomeCounts)
+	}
+	empty := engineEvaluate(engineTarget("dir"), p)
+	if len(empty.Outcomes) != 0 || empty.OutcomeCounts[NotApplicable] != 1 || empty.OutcomeCounts[Disabled] != len(registry)-1 {
+		t.Fatalf("zero-subject outcome must be counted, not expanded: %+v", empty)
+	}
+}
+
 func TestRevisionBoundariesAndUnknown(t *testing.T) {
 	p := enginePolicy(t, "dir", "local", "EC001")
 	for _, tc := range []struct {
 		name     string
 		revision *int
-		status   string
+		status   Status
 	}{
 		{"zero", engineInt(0), Pass}, {"below", engineInt(9), Pass},
 		{"boundary", engineInt(10), FindingStatus}, {"above", engineInt(12), FindingStatus},
@@ -233,8 +273,8 @@ func TestRevisionBoundariesAndUnknown(t *testing.T) {
 		})
 	}
 	report := engineEvaluate(engineTarget("dir"), p)
-	if outcome := engineOutcome(t, report, "EC001"); outcome.Status != NotApplicable || outcome.SubjectCount != 0 {
-		t.Fatalf("zero subjects: %+v", outcome)
+	if engineHasOutcome(report, "EC001") || report.OutcomeCounts[NotApplicable] != 1 {
+		t.Fatalf("zero subjects must be not applicable: %+v", report)
 	}
 	target := engineTarget("dir")
 	target.Prefixes = []evidence.Prefix{{Path: "/environment"}}
@@ -250,22 +290,23 @@ func TestRevisionBoundariesAndUnknown(t *testing.T) {
 
 func TestImageArtifactRulesAndLinkageSeverity(t *testing.T) {
 	for _, tc := range []struct {
-		name, profile, rule, severity string
-		linked                        bool
-		coverage                      string
+		name, profile, rule string
+		severity            Severity
+		linked              bool
+		coverage            string
 	}{
-		{"runtime archives", "container-runtime", "IC001", "warning", false, evidence.Complete},
-		{"development archives", "container-development", "IC001", "info", false, evidence.Complete},
-		{"generic archives", "container", "IC001", "info", false, evidence.Complete},
-		{"runtime extracted", "container-runtime", "IC002", "warning", false, evidence.Complete},
-		{"runtime linked", "container-runtime", "IC002", "info", true, evidence.Complete},
-		{"runtime unknown links", "container-runtime", "IC002", "info", false, evidence.Partial},
-		{"retained", "container-runtime", "IC004", "warning", false, evidence.Complete},
-		{"runtime manager", "container-runtime", "IC006", "warning", false, evidence.Complete},
-		{"distroless manager", "container-distroless", "IC006", "error", false, evidence.Complete},
-		{"development manager", "container-development", "IC006", "info", false, evidence.Complete},
-		{"generic manager", "container", "IC006", "info", false, evidence.Complete},
-		{"distroless shell", "container-distroless", "IC007", "error", false, evidence.Complete},
+		{"runtime archives", "container-runtime", "IC001", Warning, false, evidence.Complete},
+		{"development archives", "container-development", "IC001", Info, false, evidence.Complete},
+		{"generic archives", "container", "IC001", Info, false, evidence.Complete},
+		{"runtime extracted", "container-runtime", "IC002", Warning, false, evidence.Complete},
+		{"runtime linked", "container-runtime", "IC002", Info, true, evidence.Complete},
+		{"runtime unknown links", "container-runtime", "IC002", Info, false, evidence.Partial},
+		{"retained", "container-runtime", "IC004", Warning, false, evidence.Complete},
+		{"runtime manager", "container-runtime", "IC006", Warning, false, evidence.Complete},
+		{"distroless manager", "container-distroless", "IC006", Error, false, evidence.Complete},
+		{"development manager", "container-development", "IC006", Info, false, evidence.Complete},
+		{"generic manager", "container", "IC006", Info, false, evidence.Complete},
+		{"distroless shell", "container-distroless", "IC007", Error, false, evidence.Complete},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := enginePolicy(t, "oci-archive", tc.profile, tc.rule)
@@ -286,7 +327,7 @@ func TestImageArtifactRulesAndLinkageSeverity(t *testing.T) {
 				target.Shells = artifact
 			}
 			report := engineEvaluate(target, p)
-			if len(report.Findings) != 1 || report.Findings[0].Severity != tc.severity || report.Findings[0].Confidence != "high" {
+			if len(report.Findings) != 1 || report.Findings[0].Severity != tc.severity {
 				t.Fatalf("findings %+v", report.Findings)
 			}
 			if tc.rule == "IC004" && (report.Findings[0].Evidence.PayloadBytes != 50 || report.Findings[0].Evidence.Samples[0].LayerBytes != 1000) {
@@ -297,7 +338,7 @@ func TestImageArtifactRulesAndLinkageSeverity(t *testing.T) {
 	for _, profile := range []string{"container", "container-runtime", "container-development"} {
 		target := engineTarget("oci-archive")
 		target.Shells = []evidence.Artifact{{Path: "/bin/sh"}}
-		if report := engineEvaluate(target, enginePolicy(t, "oci-archive", profile)); engineOutcome(t, report, "IC007").Status != Disabled {
+		if report := engineEvaluate(target, enginePolicy(t, "oci-archive", profile)); engineHasOutcome(report, "IC007") || report.OutcomeCounts[Disabled] == 0 {
 			t.Fatal("ordinary profiles enabled shell prohibition")
 		}
 	}
@@ -310,7 +351,7 @@ func TestToolingPrefixLayoutAndRuntimeExceptions(t *testing.T) {
 		prefixes []evidence.Prefix
 		runtime  string
 		tooling  bool
-		want     string
+		want     Status
 	}{
 		{"base only", []evidence.Prefix{{Path: "/opt/conda", Tooling: true}}, "", false, Pass},
 		{"app only", []evidence.Prefix{{Path: "/opt/app"}}, "", false, Pass},
@@ -327,7 +368,7 @@ func TestToolingPrefixLayoutAndRuntimeExceptions(t *testing.T) {
 			if engineOutcome(t, report, "IC003").Status != tc.want {
 				t.Fatalf("unexpected outcome %+v", report.Outcomes)
 			}
-			if len(report.Findings) > 0 && report.Findings[0].Severity != "info" {
+			if len(report.Findings) > 0 && report.Findings[0].Severity != Info {
 				t.Fatal("layout candidate promoted to runtime defect")
 			}
 			if tc.tooling && !strings.Contains(report.Findings[0].Evidence.Notes[0], "does not justify removing") {
@@ -341,7 +382,7 @@ func TestProjectAssociationNeverGuessesLockMismatch(t *testing.T) {
 	p := enginePolicy(t, "dir", "local", "EC004")
 	for _, tc := range []struct {
 		project *evidence.Project
-		status  string
+		status  Status
 	}{
 		{nil, Unknown}, {&evidence.Project{Path: "/project"}, Unknown},
 		{&evidence.Project{Path: "/project", Associated: true}, FindingStatus},
@@ -359,8 +400,8 @@ func TestProjectAssociationNeverGuessesLockMismatch(t *testing.T) {
 
 func TestPolicySeverityOverridesConservativeDefaults(t *testing.T) {
 	for _, rule := range []string{"IC003", "EC004"} {
-		for _, severity := range []string{"", "error"} {
-			t.Run(rule+"/"+severity, func(t *testing.T) {
+		for _, severity := range []Severity{"", Error} {
+			t.Run(rule+"/"+string(severity), func(t *testing.T) {
 				source, profile := "oci-archive", "container-runtime"
 				target := engineTarget(source)
 				target.Prefixes = []evidence.Prefix{{Path: "/opt/conda", Tooling: true}, {Path: "/opt/conda/envs/app"}}
@@ -374,7 +415,7 @@ func TestPolicySeverityOverridesConservativeDefaults(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				wantSeverity, wantExit := "info", 0
+				wantSeverity, wantExit := Info, 0
 				if severity != "" {
 					wantSeverity, wantExit = severity, 1
 				}
@@ -388,30 +429,28 @@ func TestPolicySeverityOverridesConservativeDefaults(t *testing.T) {
 }
 
 func TestRuntimeCoverageControlsAbsenceOutcomes(t *testing.T) {
-	for _, rule := range []string{"IC003"} {
-		for _, coverage := range []string{evidence.Complete, evidence.Partial, evidence.NotCollected} {
-			for _, nested := range []bool{false, true} {
-				t.Run(fmt.Sprintf("%s/%s/nested=%t", rule, coverage, nested), func(t *testing.T) {
-					target := engineTarget("oci-archive")
-					app := "/app"
-					if nested {
-						app = "/opt/conda/envs/app"
-					}
-					target.Prefixes = []evidence.Prefix{{Path: "/opt/conda", Tooling: true}, {Path: app}}
-					target.Coverage["runtime-config"] = coverage
-					report := engineEvaluate(target, enginePolicy(t, "oci-archive", "container-runtime", rule))
-					wantStatus, wantExit := Pass, 0
-					if coverage != evidence.Complete {
-						wantStatus, wantExit = Unknown, 2
-					}
-					if nested {
-						wantStatus = FindingStatus
-					}
-					if outcome := engineOutcome(t, report, rule); outcome.Status != wantStatus || report.ExitCode() != wantExit {
-						t.Fatalf("runtime-dependent outcome %+v exit=%d, want %s/%d", outcome, report.ExitCode(), wantStatus, wantExit)
-					}
-				})
-			}
+	for _, coverage := range []string{evidence.Complete, evidence.Partial, evidence.NotCollected} {
+		for _, nested := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/nested=%t", coverage, nested), func(t *testing.T) {
+				target := engineTarget("oci-archive")
+				app := "/app"
+				if nested {
+					app = "/opt/conda/envs/app"
+				}
+				target.Prefixes = []evidence.Prefix{{Path: "/opt/conda", Tooling: true}, {Path: app}}
+				target.Coverage["runtime-config"] = coverage
+				report := engineEvaluate(target, enginePolicy(t, "oci-archive", "container-runtime", "IC003"))
+				wantStatus, wantExit := Pass, 0
+				if coverage != evidence.Complete {
+					wantStatus, wantExit = Unknown, 2
+				}
+				if nested {
+					wantStatus = FindingStatus
+				}
+				if outcome := engineOutcome(t, report, "IC003"); outcome.Status != wantStatus || report.ExitCode() != wantExit {
+					t.Fatalf("runtime-dependent outcome %+v exit=%d, want %s/%d", outcome, report.ExitCode(), wantStatus, wantExit)
+				}
+			})
 		}
 	}
 }
@@ -426,18 +465,18 @@ func TestCoverageAndExitPrecedence(t *testing.T) {
 	}
 	target.Archives = []evidence.Artifact{{Path: "/cache/pkg.conda"}}
 	report = engineEvaluate(target, p)
-	if len(report.Findings) != 1 || report.Findings[0].Severity != "warning" || report.ExitCode() != 2 {
+	if len(report.Findings) != 1 || report.Findings[0].Severity != Warning || report.ExitCode() != 2 {
 		t.Fatal("positive partial facts discarded or inspection failure did not win")
 	}
-	p.FailOn = "none"
+	p.FailOn = NoFailure
 	if engineEvaluate(target, p).ExitCode() != 2 {
 		t.Fatal("fail-on none masked inspection error")
 	}
 	target.Coverage["final-cache"] = evidence.Complete
 	for _, tc := range []struct {
-		threshold string
+		threshold Severity
 		code      int
-	}{{"none", 0}, {"error", 0}, {"warning", 1}, {"info", 1}} {
+	}{{NoFailure, 0}, {Error, 0}, {Warning, 1}, {Info, 1}} {
 		p.FailOn = tc.threshold
 		if got := engineEvaluate(target, p).ExitCode(); got != tc.code {
 			t.Fatalf("threshold %s returned %d", tc.threshold, got)
@@ -542,7 +581,7 @@ func TestDeterministicReportAndFingerprintIdentity(t *testing.T) {
 	one := engineEvaluate(target, p)
 	target.Input = "/different-archive-label"
 	target.Archives[0].Bytes = 20
-	p.Rules["IC001"] = RuleOptions{Enabled: engineBool(true), Severity: "error"}
+	p.Rules["IC001"] = RuleOptions{Enabled: engineBool(true), Severity: Error}
 	two := Evaluate(evidence.Snapshot{Started: engineNow.Add(time.Hour), Targets: []evidence.Target{target}}, p, engineNow.Add(time.Hour))
 	if one.Findings[0].Fingerprint != two.Findings[0].Fingerprint || one.ConfigDigest == two.ConfigDigest {
 		t.Fatal("fingerprint includes display/size/severity/time or config digest omitted options")
@@ -580,6 +619,14 @@ func TestBoundedSamplesAndFindings(t *testing.T) {
 	report = engineEvaluate(target, local)
 	if len(report.Findings) != MaxFindings || report.ExitCode() != 2 || report.Status != "incomplete" {
 		t.Fatalf("finding cap not enforced: count=%d status=%s exit=%d", len(report.Findings), report.Status, report.ExitCode())
+	}
+	paths := make([]string, 0, len(report.Findings))
+	for _, finding := range report.Findings {
+		paths = append(paths, finding.Evidence.Paths[0])
+	}
+	slices.Sort(paths)
+	if paths[0] != "/envs/00000" || paths[len(paths)-1] != fmt.Sprintf("/envs/%05d", MaxFindings-1) {
+		t.Fatalf("truncation changed the original emission-order selection: %s .. %s", paths[0], paths[len(paths)-1])
 	}
 }
 
@@ -636,11 +683,8 @@ func TestSnapshotIsNotMutatedAndAdviceIsStatic(t *testing.T) {
 		t.Fatal("pure evaluation mutated snapshot")
 	}
 	for _, finding := range report.Findings {
-		if strings.Contains(finding.Recommendation, "rm -rf") || strings.Contains(finding.Recommendation, "--force-pkgs-dirs") {
+		if strings.Contains(finding.Message, "rm -rf") || strings.Contains(finding.Message, "--force-pkgs-dirs") {
 			t.Fatal("unsafe unconditional deletion advice")
-		}
-		if finding.Severity == finding.Confidence {
-			t.Fatal("confidence derived from severity")
 		}
 	}
 }

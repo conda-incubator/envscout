@@ -35,9 +35,9 @@ func TestReadConfigValid(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Policy{
-		Version: 1, Profile: "container-runtime", FailOn: "warning",
+		Version: 1, Profile: "container-runtime", FailOn: Warning,
 		Rules: map[string]RuleOptions{
-			"EC001": {Enabled: new(true), Severity: "info", RevisionThreshold: new(12)},
+			"EC001": {Enabled: new(true), Severity: Info, RevisionThreshold: new(12)},
 			"IC004": {Enabled: new(false)},
 		},
 		Suppressions: []Suppression{{
@@ -166,10 +166,10 @@ func TestValidateConfig(t *testing.T) {
 	}{
 		{"version", "version", func(p *Policy) { p.Version = 2 }},
 		{"profile", "profile", func(p *Policy) { p.Profile = "production" }},
-		{"fail_on", "fail_on", func(p *Policy) { p.FailOn = "critical" }},
+		{"fail_on", "fail_on", func(p *Policy) { p.FailOn = Severity("critical") }},
 		{"unknown rule", "unknown rule", func(p *Policy) { p.Rules["EC999"] = RuleOptions{} }},
 		{"lowercase rule", "unknown rule", func(p *Policy) { p.Rules["ec001"] = RuleOptions{} }},
-		{"severity", "severity", func(p *Policy) { p.Rules["EC001"] = RuleOptions{Severity: "none"} }},
+		{"severity", "severity", func(p *Policy) { p.Rules["EC001"] = RuleOptions{Severity: NoFailure} }},
 		{"zero threshold", "revision_threshold", func(p *Policy) { p.Rules["EC001"] = RuleOptions{RevisionThreshold: new(0)} }},
 		{"negative threshold", "revision_threshold", func(p *Policy) { p.Rules["EC001"] = RuleOptions{RevisionThreshold: new(-1)} }},
 		{"large threshold", "revision_threshold", func(p *Policy) { p.Rules["EC001"] = RuleOptions{RevisionThreshold: new(1_000_001)} }},
@@ -212,21 +212,21 @@ func TestValidateConfig(t *testing.T) {
 }
 
 func TestValidateConfigValidValues(t *testing.T) {
-	for _, profile := range []string{"", "local", "container", "container-runtime", "container-distroless", "container-development"} {
-		for _, failOn := range []string{"", "none", "info", "warning", "error"} {
+	for _, profile := range append([]string{""}, profiles...) {
+		for _, failOn := range []Severity{"", NoFailure, Info, Warning, Error} {
 			policy := Policy{Version: 1, Profile: profile, FailOn: failOn}
 			if err := ValidateConfig(policy); err != nil {
 				t.Fatalf("valid profile %q, fail_on %q: %v", profile, failOn, err)
 			}
 		}
 	}
-	for _, id := range []string{"EC001", "EC002", "EC003", "EC004", "IC001", "IC002", "IC003", "IC004", "IC006", "IC007"} {
-		for _, severity := range []string{"", "info", "warning", "error"} {
+	for _, rule := range ListRules() {
+		for _, severity := range []Severity{"", Info, Warning, Error} {
 			policy := validLintPolicy()
-			policy.Rules[id] = RuleOptions{Severity: severity, Enabled: new(false)}
-			policy.Suppressions[0].Rule = id
+			policy.Rules[rule.ID] = RuleOptions{Severity: severity, Enabled: new(false)}
+			policy.Suppressions[0].Rule = rule.ID
 			if err := ValidateConfig(policy); err != nil {
-				t.Fatalf("valid rule %q, severity %q: %v", id, severity, err)
+				t.Fatalf("valid rule %q, severity %q: %v", rule.ID, severity, err)
 			}
 		}
 	}

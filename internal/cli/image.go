@@ -3,7 +3,7 @@ package cli
 import (
 	"time"
 
-	"github.com/anaconda/envscout/internal/inventory"
+	"github.com/conda-incubator/envscout/internal/inventory"
 	"github.com/spf13/cobra"
 )
 

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anaconda/envscout/internal/testimage"
+	"github.com/conda-incubator/envscout/internal/testimage"
 )
 
 // writeCondaPrefix creates a minimal conda prefix with one conda package record.

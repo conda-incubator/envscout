@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/anaconda/envscout/internal/cli"
+	"github.com/conda-incubator/envscout/internal/cli"
 )
 
 func main() {

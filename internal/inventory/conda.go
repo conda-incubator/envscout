@@ -12,12 +12,12 @@ import (
 
 	_ "modernc.org/sqlite" // Syft's RPM cataloger requires the SQLite driver.
 
-	"github.com/anaconda/envscout/internal/discovery"
 	"github.com/anchore/syft/syft/format/cyclonedxjson"
 	"github.com/anchore/syft/syft/pkg"
 	"github.com/anchore/syft/syft/sbom"
 	"github.com/anchore/syft/syft/source"
 	"github.com/anchore/syft/syft/source/directorysource"
+	"github.com/conda-incubator/envscout/internal/discovery"
 )
 
 // Result describes what Syft cataloged from an installed prefix or image.

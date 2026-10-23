@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anaconda/envscout/internal/imageinput"
+	"github.com/conda-incubator/envscout/internal/imageinput"
 )
 
 // Collect gathers evidence for one source. It performs no signal handling,

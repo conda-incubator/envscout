@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anaconda/envscout/internal/discovery"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/conda-incubator/envscout/internal/discovery"
 	"golang.org/x/term"
 )
 
