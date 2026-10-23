@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anaconda/envscout/internal/discovery"
-	"github.com/anaconda/envscout/internal/inventory"
 	"github.com/anchore/syft/syft/pkg"
 	"github.com/anchore/syft/syft/source"
 	"github.com/anchore/syft/syft/source/directorysource"
+	"github.com/conda-incubator/envscout/internal/discovery"
+	"github.com/conda-incubator/envscout/internal/inventory"
 )
 
 func FileID(filename string) string {

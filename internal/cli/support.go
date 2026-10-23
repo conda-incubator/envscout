@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/anaconda/envscout/internal/discovery"
+	"github.com/conda-incubator/envscout/internal/discovery"
 	"github.com/fatih/color"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"

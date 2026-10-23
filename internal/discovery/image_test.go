@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anaconda/envscout/internal/imageinput"
-	"github.com/anaconda/envscout/internal/testimage"
 	"github.com/anchore/stereoscope/pkg/file"
 	"github.com/anchore/stereoscope/pkg/filetree"
 	"github.com/anchore/stereoscope/pkg/image"
+	"github.com/conda-incubator/envscout/internal/imageinput"
+	"github.com/conda-incubator/envscout/internal/testimage"
 )
 
 const imagePackageJSON = `{"name":"python","version":"3.12"}`

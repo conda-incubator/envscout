@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anaconda/envscout/internal/evidence"
-	"github.com/anaconda/envscout/internal/testimage"
+	"github.com/conda-incubator/envscout/internal/evidence"
+	policy "github.com/conda-incubator/envscout/internal/lint"
+	"github.com/conda-incubator/envscout/internal/testimage"
 )
 
 func lintFixture(t *testing.T, revision int) string {
@@ -87,6 +88,58 @@ func TestLintListsAllRegisteredRules(t *testing.T) {
 	output, err = executeLint(t, "--list-rules")
 	if err != nil || !strings.Contains(output, "EC002") || !strings.Contains(output, "unavailable") {
 		t.Fatalf("text rules listing hides unavailable rules: %v %s", err, output)
+	}
+}
+
+func TestLintJSONSchemaOmitsDerivedFindingMetadata(t *testing.T) {
+	output, err := executeLint(t, "--format", "json", "--fail-on", "none", lintFixture(t, 12))
+	if err != nil {
+		t.Fatalf("lint: %v %s", err, output)
+	}
+	var report struct {
+		SchemaVersion int              `json:"schema_version"`
+		Findings      []map[string]any `json:"findings"`
+		OutcomeCounts map[string]int   `json:"outcome_counts"`
+		Outcomes      []map[string]any `json:"outcomes"`
+	}
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	if report.SchemaVersion != 3 || policy.SchemaVersion != 3 {
+		t.Fatalf("schema_version = %d, want 3", report.SchemaVersion)
+	}
+	if len(report.Findings) == 0 {
+		t.Fatal("expected at least one finding")
+	}
+	for _, f := range report.Findings {
+		for _, key := range []string{"rule_version", "confidence", "category", "references", "recommendation"} {
+			if _, ok := f[key]; ok {
+				t.Errorf("finding retains derived metadata key %q: %v", key, f)
+			}
+		}
+	}
+	// OutcomeCounts includes disabled/not-applicable states omitted from Outcomes.
+	active := make(map[string]int)
+	for _, o := range report.Outcomes {
+		for _, key := range []string{"findings", "rule_version"} {
+			if _, present := o[key]; present {
+				t.Fatalf("outcome retains duplicate %q metadata: %+v", key, o)
+			}
+		}
+		active[o["status"].(string)]++
+	}
+	for status, n := range active {
+		if report.OutcomeCounts[status] != n {
+			t.Errorf("OutcomeCounts[%s]=%d, active outcomes=%d", status, report.OutcomeCounts[status], n)
+		}
+	}
+	if report.OutcomeCounts[string(policy.Disabled)] == 0 {
+		t.Errorf("OutcomeCounts omits disabled outcomes: %v", report.OutcomeCounts)
+	}
+	for _, rule := range policy.ListRules() {
+		if _, ok := policy.LookupRule(rule.ID); !ok {
+			t.Errorf("listed rule %s not returned by LookupRule", rule.ID)
+		}
 	}
 }
 

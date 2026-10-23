@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/anaconda/envscout/internal/discovery"
-	"github.com/anaconda/envscout/internal/inventory"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/conda-incubator/envscout/internal/discovery"
+	"github.com/conda-incubator/envscout/internal/inventory"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )

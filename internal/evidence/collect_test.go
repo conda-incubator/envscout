@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anaconda/envscout/internal/testimage"
+	"github.com/conda-incubator/envscout/internal/testimage"
 )
 
 func collectSourceIssue(t *testing.T, snapshot Snapshot, source string) Issue {

@@ -1,0 +1,20 @@
+Lint | profile container-runtime | ruleset 2
+Target: oci-archive:golden-image (1 confirmed prefixes)
+IC001 warning oci-archive:golden-image
+  1 download archives remain in confirmed final-image conda package caches.
+  Next: Review build-time download-archive cleanup using the package manager's tarball-only cleanup or a BuildKit cache mount. Observed archive payload bytes are not predicted image-size or vulnerability savings.
+  Evidence: opt/conda/pkgs/old-1.0-0.conda (2048 logical payload bytes)
+IC002 warning oci-archive:golden-image
+  1 extracted package-cache entries remain in the final image.
+  Next: Prefer copying a tested application prefix into a compatible runtime stage. Extracted caches can supply required symlink or hardlink targets; do not remove them without validating dependency and relocation behavior. Logical payload bytes are not unique or reclaimable bytes.
+  Evidence: opt/conda/pkgs/demo-1.0-0 (4096 logical payload bytes)
+IC004 warning oci-archive:golden-image
+  1 hidden or replaced cache references remain in final-image referenced layers.
+  Next: Review same-step build-time cleanup, BuildKit cache mounts, or a dedicated compatible runtime stage. A later deletion does not remove earlier referenced layer content. Compressed descriptor sizes describe complete layers, not per-file savings; this evidence does not identify Dockerfile instructions or unrelated builder stages.
+  Evidence: opt/conda/pkgs/old-1.0-0.conda (2048 logical payload bytes) layer 2 sha256:3333333333333333333333333333333333333333333333333333333333333333 (512 compressed layer bytes, not per-file savings)
+IC006 warning oci-archive:golden-image
+  1 OS package-manager command identities are confirmed in the final image.
+  Next: For declared runtime images, review keeping installation commands in the builder stage and copying tested runtime contents into a compatible final image. Intentional package-management workloads may retain them. Preserve package databases, conda metadata and shared runtime libraries for behavior and scanner visibility; removing evidence is not vulnerability remediation.
+  Evidence: usr/bin/apt (128 logical payload bytes)
+Summary: completed; 1 targets; pass 1, findings 4, unknown 0, not applicable 0, disabled 5, suppressed 0
+Coverage: selected rules and stated scopes only; this is not a vulnerability assessment.

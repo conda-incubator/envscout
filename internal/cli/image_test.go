@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anaconda/envscout/internal/imageinput"
-	"github.com/anaconda/envscout/internal/testimage"
+	"github.com/conda-incubator/envscout/internal/imageinput"
+	"github.com/conda-incubator/envscout/internal/testimage"
 )
 
 func TestImageFindAndScan(t *testing.T) {

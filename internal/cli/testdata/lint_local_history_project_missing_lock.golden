@@ -1,0 +1,12 @@
+Lint | profile local | ruleset 2
+Target: file:///golden/local/env (1 confirmed prefixes)
+EC001 info file:///golden/local/env
+  Conda history revision 12 meets the configured review threshold 10.
+  Next: Review the recorded dependency transactions and, if useful, recreate from recorded dependencies. Revision is a transaction count, not evidence of drift, corruption, age or vulnerabilities; it does not account for pip installs or arbitrary file edits.
+  Evidence: file:///golden/local/env
+EC004 info file:///golden/local/env
+  The explicitly associated local project has no verified resolved lock in its inspected project scope.
+  Next: Review the project's portability and reproducibility requirements and record a supported resolved lock when appropriate. This observation is not an installed-package mismatch and does not require a lock in a runtime image.
+  Evidence: file:///golden/local/project
+Summary: completed; 1 targets; pass 0, findings 2, unknown 0, not applicable 0, disabled 6, suppressed 0
+Coverage: selected rules and stated scopes only; this is not a vulnerability assessment.

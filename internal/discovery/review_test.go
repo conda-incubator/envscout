@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anaconda/envscout/internal/testimage"
+	"github.com/conda-incubator/envscout/internal/testimage"
 )
 
 func envPaths(report Report) map[string]bool {

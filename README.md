@@ -35,6 +35,8 @@ A candidate needs a `conda-meta` directory with at least one regular, non-symlin
 
 For OCI archives: `./envscout lint --source oci-archive --platform linux/amd64 --profile container-runtime image.tar`. Use `--format json` for CI; exit codes are 0 (below threshold), 1 (policy findings), 2 (input/inspection failure), and 130 (cancelled). Lint creates no SBOMs. Pixi hash and manifest-sync verification remain unavailable; package counts are not a sync check.
 
+Lint JSON report schema is version 3; policy config files remain version 1. `findings` contain instance-specific evidence, messages, severities, and fingerprints. Rule descriptions, confidence, references, and recommendations are available from `lint --list-rules --format json`, keyed by `rule_id`. `outcomes` includes active checks only; `outcome_counts` also accounts for disabled and not-applicable checks. Match findings to outcomes using `(target, rule_id)` rather than duplicate fingerprint lists. Rule predicates, finding fingerprints, and ruleset version 2 are unchanged.
+
 Run `make example-lint` for the deliberately bloated `examples/Dockerfile` demo (policy failure is expected). It builds the OCI archive if missing and otherwise reuses it; set `EXAMPLE_ARCHIVE=bin/demo.tar` to change the path. Building requires Docker Buildx and network access, with a temporary builder unless `BUILDER=NAME` selects an existing one. Offline fixtures in `make lint-demo` do not require Docker.
 
 Only scan trusted image archives; envscout is not a sandbox. Windows output inherits filesystem ACLs, so choose a restricted location for sensitive reports.

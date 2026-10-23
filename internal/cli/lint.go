@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anaconda/envscout/internal/evidence"
-	policy "github.com/anaconda/envscout/internal/lint"
+	"github.com/conda-incubator/envscout/internal/evidence"
+	policy "github.com/conda-incubator/envscout/internal/lint"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -158,13 +158,17 @@ func renderLint(out io.Writer, report policy.Report, format string, noColor bool
 		if finding.Suppression != nil {
 			continue
 		}
-		severity := colour(out, noColor, finding.Severity, severityAttribute(finding.Severity))
-		printer.Printf("%s %s %s\n  %s\n  Next: %s\n", finding.RuleID, severity, lintText(finding.Target), lintText(finding.Message), lintText(finding.Recommendation))
+		rule, ok := policy.LookupRule(finding.RuleID)
+		if !ok {
+			return fmt.Errorf("render lint finding %q: rule metadata unavailable", finding.RuleID)
+		}
+		severity := colour(out, noColor, string(finding.Severity), severityAttribute(finding.Severity))
+		printer.Printf("%s %s %s\n  %s\n  Next: %s\n", finding.RuleID, severity, lintText(finding.Target), lintText(finding.Message), lintText(rule.Fix))
 		renderEvidence(printer, finding.Evidence)
 	}
 	renderOutcomes(printer, report)
-	counts := countOutcomes(report)
-	printer.Printf("Summary: %s; %d targets; pass %d, findings %d, unknown %d, not applicable %d, disabled %d, suppressed %d\n", report.Status, len(report.Targets), counts["pass"], counts["finding"], counts["unknown"], counts["not_applicable"], counts["disabled"], counts["suppressed"])
+	counts := report.OutcomeCounts
+	printer.Printf("Summary: %s; %d targets; pass %d, findings %d, unknown %d, not applicable %d, disabled %d, suppressed %d\n", report.Status, len(report.Targets), counts[policy.Pass], counts[policy.FindingStatus], counts[policy.Unknown], counts[policy.NotApplicable], counts[policy.Disabled], counts[policy.Suppressed])
 	for _, issue := range report.Issues {
 		printer.Printf("Inspection issue: %s: %s\n", lintText(issue.Path), lintText(issue.Message))
 	}
@@ -175,11 +179,11 @@ func renderLint(out io.Writer, report policy.Report, format string, noColor bool
 	return printer.Err()
 }
 
-func severityAttribute(severity string) color.Attribute {
+func severityAttribute(severity policy.Severity) color.Attribute {
 	switch severity {
-	case "info":
+	case policy.Info:
 		return color.FgCyan
-	case "warning":
+	case policy.Warning:
 		return color.FgYellow
 	default:
 		return color.FgRed
@@ -211,12 +215,4 @@ func renderOutcomes(printer *printer, report policy.Report) {
 			printer.Printf("Check %s %s: %s\n", outcome.RuleID, outcome.Status, lintText(outcome.Reason))
 		}
 	}
-}
-
-func countOutcomes(report policy.Report) map[string]int {
-	counts := make(map[string]int)
-	for _, outcome := range report.Outcomes {
-		counts[outcome.Status]++
-	}
-	return counts
 }

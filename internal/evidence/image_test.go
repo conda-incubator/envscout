@@ -13,13 +13,13 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/anaconda/envscout/internal/discovery"
-	"github.com/anaconda/envscout/internal/imageinput"
-	"github.com/anaconda/envscout/internal/testimage"
 	"github.com/anchore/stereoscope/pkg/file"
 	"github.com/anchore/stereoscope/pkg/filetree"
 	"github.com/anchore/stereoscope/pkg/filetree/filenode"
 	"github.com/anchore/stereoscope/pkg/image"
+	"github.com/conda-incubator/envscout/internal/discovery"
+	"github.com/conda-incubator/envscout/internal/imageinput"
+	"github.com/conda-incubator/envscout/internal/testimage"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 

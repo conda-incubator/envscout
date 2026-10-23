@@ -11,13 +11,13 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/anaconda/envscout/internal/discovery"
-	"github.com/anaconda/envscout/internal/imageinput"
-	"github.com/anaconda/envscout/internal/testimage"
 	"github.com/anchore/syft/syft/cataloging"
 	"github.com/anchore/syft/syft/pkg"
 	"github.com/anchore/syft/syft/source"
 	"github.com/anchore/syft/syft/source/directorysource"
+	"github.com/conda-incubator/envscout/internal/discovery"
+	"github.com/conda-incubator/envscout/internal/imageinput"
+	"github.com/conda-incubator/envscout/internal/testimage"
 )
 
 // TestOfflineConfig pins every remote lookup, host cache, and archive network flag that the

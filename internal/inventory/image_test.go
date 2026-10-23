@@ -12,12 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anaconda/envscout/internal/imageinput"
-	"github.com/anaconda/envscout/internal/testimage"
 	"github.com/anchore/stereoscope/pkg/image"
 	"github.com/anchore/syft/syft/file"
 	"github.com/anchore/syft/syft/pkg"
 	"github.com/anchore/syft/syft/sbom"
+	"github.com/conda-incubator/envscout/internal/imageinput"
+	"github.com/conda-incubator/envscout/internal/testimage"
 )
 
 func TestImageFilename(t *testing.T) {

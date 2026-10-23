@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anaconda/envscout/internal/testimage"
+	"github.com/conda-incubator/envscout/internal/testimage"
 )
 
 // runCLI executes args on a fresh root with captured stdout and stderr.

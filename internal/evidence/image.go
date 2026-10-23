@@ -12,14 +12,14 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/anaconda/envscout/internal/discovery"
-	"github.com/anaconda/envscout/internal/imageinput"
-	"github.com/anaconda/envscout/internal/inventory"
 	"github.com/anchore/stereoscope/pkg/file"
 	"github.com/anchore/stereoscope/pkg/filetree"
 	"github.com/anchore/stereoscope/pkg/filetree/filenode"
 	"github.com/anchore/syft/syft/pkg"
 	"github.com/anchore/syft/syft/source"
+	"github.com/conda-incubator/envscout/internal/discovery"
+	"github.com/conda-incubator/envscout/internal/imageinput"
+	"github.com/conda-incubator/envscout/internal/inventory"
 )
 
 const (
