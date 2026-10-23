@@ -21,14 +21,19 @@ jobs:
             goos: linux
             goarch: amd64
             binary: envscout
+            rust-target: ""
           - os: macos-latest
             goos: darwin
             goarch: arm64
             binary: envscout
+            rust-target: ""
           - os: windows-latest
             goos: windows
             goarch: amd64
             binary: envscout.exe
+            # MinGW-w64 GNU target: cgo needs GNU-compatible objects, so the
+            # MSVC native archive cannot be linked by Go.
+            rust-target: x86_64-pc-windows-gnu
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7.0.1
@@ -36,35 +41,42 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test ./...
-      - run: make lint-demo
+      - name: Set up MinGW-w64 toolchain (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-gcc
+            make
+          # Keep the MSYS2 MINGW64 bin directory on PATH so Go cgo and
+          # Rust both find gcc/ld for the x86_64-pc-windows-gnu target.
+          path-type: inherit
+      - uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+        with:
+          toolchain: stable
+          target: ${{ matrix.rust-target }}
+          cache: true
+          cache-directories: .go-rattler-native
+          cache-key: ${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.rust-target }}
+      - name: Build and test with native go-rattler
         if: runner.os != 'Windows'
         shell: bash
-      - run: go vet ./...
-      - name: Build CLI
-        run: go build -o ${{ matrix.binary }} ./cmd/envscout
+        run: make test vet lint-demo build
+      - name: Build and test with native go-rattler (Windows GNU)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          CARGO_BUILD_TARGET: ${{ matrix.rust-target }}
+          CC: gcc
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: gcc
+        run: make test vet build
+        # One make invocation runs the shared `native` prerequisite once
+        # before test, vet, and build.
       - name: Upload CLI binary
         uses: actions/upload-artifact@v7.0.1
         with:
           name: envscout-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ${{ matrix.binary }}
           if-no-files-found: error
-
-  pixi:
-    name: Pixi binding (linux/amd64)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-go@v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
-        with:
-          toolchain: stable
-          cache: true
-      - run: make test-pixi
-      - run: make build-pixi

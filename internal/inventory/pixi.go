@@ -1,6 +1,4 @@
-//go:build pixi
-
-package cli
+package inventory
 
 import (
 	"encoding/json"
@@ -12,9 +10,11 @@ import (
 	gorattler "github.com/conda-incubator/go-rattler"
 )
 
-// pixiLockSummary reads a Pixi marker only in opt-in builds. A lock lookup
+// PixiLockSummary reads the Pixi marker for prefixes that carry one and reports
+// the locked package counts from the referenced pixi.lock. A lock lookup
 // describes the lock contents, not the installed packages or manifest freshness.
-func pixiLockSummary(prefix string) string {
+// It returns an empty string when prefix has no Pixi marker.
+func PixiLockSummary(prefix string) string {
 	marker := filepath.Join(prefix, "conda-meta", "pixi")
 	info, err := os.Lstat(marker)
 	if os.IsNotExist(err) {

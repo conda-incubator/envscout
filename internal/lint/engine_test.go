@@ -141,6 +141,37 @@ func TestBuildPolicyRejectsInvalidOrUnavailableRequests(t *testing.T) {
 	}
 }
 
+func TestBuildPolicyRuntimePrefixIsExactAndClean(t *testing.T) {
+	for _, prefix := range []string{"/", "/opt/app", "/opt/app/env"} {
+		p, err := BuildPolicy(Policy{}, Options{Source: "oci-archive", RuntimePrefix: prefix})
+		if err != nil {
+			t.Fatalf("clean prefix %q rejected: %v", prefix, err)
+		}
+		if p.RuntimePrefix != prefix {
+			t.Fatalf("prefix %q normalized to %q", prefix, p.RuntimePrefix)
+		}
+	}
+	for _, prefix := range []string{
+		"/opt//app", "/opt/app/", "/opt/./app", "/opt/../app", "opt/app",
+		`/opt\app`, "/opt/app\n", "/opt/app\x00", "/opt/app\t", "/opt/\x7fapp",
+	} {
+		if _, err := BuildPolicy(Policy{}, Options{Source: "oci-archive", RuntimePrefix: prefix}); err == nil {
+			t.Fatalf("dirty runtime prefix %q accepted", prefix)
+		}
+	}
+}
+
+func TestBuildPolicyRuntimePrefixDoesNotMutateConfig(t *testing.T) {
+	config := Policy{Version: ConfigVersion, Rules: map[string]RuleOptions{"IC001": {Enabled: engineBool(false)}}}
+	before := config.Rules["IC001"]
+	if _, err := BuildPolicy(config, Options{Source: "oci-archive", RuntimePrefix: "/opt/app"}); err != nil {
+		t.Fatal(err)
+	}
+	if config.RuntimePrefix != "" || config.Rules["IC001"] != before {
+		t.Fatalf("input policy mutated: %+v", config)
+	}
+}
+
 func TestRequirementsUnionAndDisabledCollectors(t *testing.T) {
 	p := enginePolicy(t, "oci-archive", "container-runtime", "IC001", "IC002", "IC003", "IC006")
 	want := []string{"cache-link-dependencies", "final-cache", "os-package-tools", "prefixes", "runtime-config", "tooling-prefix"}
