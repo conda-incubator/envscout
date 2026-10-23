@@ -1,11 +1,11 @@
 // Package imageinput opens an OCI image archive for one explicit platform
-// through stereoscope and exposes the selected image, its manifest, config,
-// and identity.
+// through stereoscope. It exposes the selected image, whose canonical metadata
+// (config, raw manifest, layer digests and sizes) lives on Image, plus a
+// user-facing Identity projection.
 package imageinput
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,7 +15,6 @@ import (
 	"github.com/anchore/stereoscope/pkg/file"
 	"github.com/anchore/stereoscope/pkg/image"
 	"github.com/anchore/stereoscope/pkg/image/oci"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
 // Limits bound the accepted archive size. They do not constitute a process
@@ -38,15 +37,16 @@ type Identity struct {
 	Variant        string `json:"variant,omitempty"`
 }
 
-// Loaded owns the one image used for discovery and inventory.
+// Loaded owns the one image used for discovery and inventory. Image.Metadata is
+// the canonical source for config, raw manifest, and layer digests and sizes.
 type Loaded struct {
 	Image    *image.Image
 	Identity Identity
-	Manifest *v1.Manifest
-	Config   *v1.ConfigFile
 	gen      *file.TempDirGenerator
 }
 
+// Close releases the staged image and its temp directories. It is idempotent
+// and safe on a nil receiver.
 func (l *Loaded) Close() error {
 	if l == nil {
 		return nil
@@ -63,6 +63,7 @@ func (l *Loaded) Close() error {
 	return err
 }
 
+// Load opens the OCI archive at input for platform using DefaultLimits.
 func Load(ctx context.Context, input, platform string) (*Loaded, error) {
 	return LoadWithLimits(ctx, input, platform, DefaultLimits())
 }
@@ -106,61 +107,26 @@ func LoadWithLimits(ctx context.Context, input, platform string, limits Limits) 
 	if img == nil {
 		return nil, errors.Join(fmt.Errorf("image provider returned no image"), gen.Cleanup())
 	}
-	loaded, err := describe(img, abs, gen)
-	if err != nil {
-		return nil, errors.Join(err, img.Cleanup(), gen.Cleanup())
+	// RawManifest is best-effort in the provider, so it is the one canonical field
+	// that can be absent; the layer count is checked against the config diff IDs.
+	if len(img.Metadata.RawManifest) == 0 || len(img.Metadata.Config.RootFS.DiffIDs) != len(img.Layers) {
+		return nil, errors.Join(fmt.Errorf("image metadata incomplete: manifest or layer diff IDs unavailable"), img.Cleanup(), gen.Cleanup())
 	}
-	return loaded, nil
+	return &Loaded{Image: img, Identity: identityFromImage(img, abs), gen: gen}, nil
 }
 
-// describe derives the manifest, config copy, and identity evidence consumers
-// require from the indexed image.
-func describe(img *image.Image, abs string, gen *file.TempDirGenerator) (*Loaded, error) {
-	var manifest v1.Manifest
-	if err := json.Unmarshal(img.Metadata.RawManifest, &manifest); err != nil {
-		return nil, fmt.Errorf("image manifest unavailable: %w", err)
-	}
-	if len(manifest.Layers) != len(img.Layers) {
-		return nil, fmt.Errorf("image manifest lists %d layers but %d were indexed", len(manifest.Layers), len(img.Layers))
-	}
-	cfg := img.Metadata.Config
-	configDigest := img.Metadata.ID
-	if !strings.HasPrefix(configDigest, "sha256:") {
-		configDigest = manifest.Config.Digest.String()
-	}
-	identity := Identity{
+// identityFromImage projects the provider-populated metadata into the
+// user-facing Identity. The OCI provider always sets ManifestDigest and ID
+// (the ggcr config name, sha256-prefixed), and Read fills OS/Architecture/Variant
+// from the same config that the provider platform check validated.
+func identityFromImage(img *image.Image, abs string) Identity {
+	return Identity{
 		Source:         "oci-archive",
 		Input:          abs,
 		ManifestDigest: img.Metadata.ManifestDigest,
-		ConfigDigest:   configDigest,
+		ConfigDigest:   img.Metadata.ID,
 		OS:             img.Metadata.OS,
 		Architecture:   img.Metadata.Architecture,
 		Variant:        img.Metadata.Variant,
 	}
-	if identity.OS == "" {
-		identity.OS = cfg.OS
-	}
-	if identity.Architecture == "" {
-		identity.Architecture = cfg.Architecture
-	}
-	if identity.Variant == "" {
-		identity.Variant = cfg.Variant
-	}
-	if !validDigest(identity.ManifestDigest) || !validDigest(identity.ConfigDigest) {
-		return nil, fmt.Errorf("image identity digests are unavailable or malformed")
-	}
-	return &Loaded{Image: img, Manifest: &manifest, Config: &cfg, Identity: identity, gen: gen}, nil
-}
-
-func validDigest(digest string) bool {
-	hexPart, ok := strings.CutPrefix(digest, "sha256:")
-	if !ok || len(hexPart) != 64 {
-		return false
-	}
-	for _, c := range hexPart {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
 }

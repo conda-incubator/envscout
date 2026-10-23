@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,10 +13,10 @@ import (
 	_ "modernc.org/sqlite" // Syft's RPM cataloger requires the SQLite driver.
 
 	"github.com/anaconda/envscout/internal/discovery"
-	"github.com/anchore/syft/syft"
 	"github.com/anchore/syft/syft/format/cyclonedxjson"
 	"github.com/anchore/syft/syft/pkg"
 	"github.com/anchore/syft/syft/sbom"
+	"github.com/anchore/syft/syft/source"
 	"github.com/anchore/syft/syft/source/directorysource"
 )
 
@@ -55,41 +56,64 @@ func WriteConda(ctx context.Context, env discovery.Environment, outputDir string
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	if err := os.MkdirAll(outputDir, 0o700); err != nil {
-		return Result{}, fmt.Errorf("create SBOM directory: %w", err)
-	}
-	destination := filepath.Join(outputDir, Filename(env))
-	if _, err := os.Lstat(destination); err == nil {
-		return Result{}, fmt.Errorf("SBOM already exists: %s", destination)
-	} else if !os.IsNotExist(err) {
-		return Result{}, fmt.Errorf("check SBOM destination %s: %w", destination, err)
-	}
 	src, err := directorysource.NewFromPath(env.Path)
 	if err != nil {
 		return Result{}, fmt.Errorf("open environment %s: %w", env.Path, err)
 	}
-	defer func() { _ = src.Close() }()
-	bom, err := syft.CreateSBOM(ctx, src, syft.DefaultCreateSBOMConfig().WithParallelism(4))
+	result, writeErr := write(ctx, src, filepath.Join(outputDir, Filename(env)))
+	if err := src.Close(); err != nil {
+		// Joined so a source close failure is reported without masking the write outcome.
+		return result, errors.Join(writeErr, fmt.Errorf("close environment %s: %w", env.Path, err))
+	}
+	return result, writeErr
+}
+
+// write reserves destination exclusively, catalogs src, and encodes CycloneDX JSON into it.
+// Any failure after reservation removes the partial file. The caller owns src.
+func write(ctx context.Context, src source.Source, destination string) (result Result, err error) {
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		return Result{}, fmt.Errorf("create SBOM directory: %w", err)
+	}
+	// Reserve the destination before cataloging, including against concurrent writers.
+	// O_EXCL refuses to follow an existing symlink, including a dangling one.
+	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return Result{}, fmt.Errorf("create SBOM %s: SBOM already exists: %w", destination, err)
+	} else if err != nil {
+		return Result{}, fmt.Errorf("create SBOM %s: %w", destination, err)
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = file.Close()
+			_ = os.Remove(destination)
+		}
+	}()
+	bom, err := Catalog(ctx, src)
 	if err != nil {
-		return Result{}, fmt.Errorf("scan environment %s: %w", env.Path, err)
+		return Result{}, fmt.Errorf("scan %s: %w", destination, err)
 	}
 	encoder, err := cyclonedxjson.NewFormatEncoderWithConfig(cyclonedxjson.DefaultEncoderConfig())
 	if err != nil {
 		return Result{}, fmt.Errorf("configure CycloneDX output: %w", err)
 	}
-	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return Result{}, fmt.Errorf("create SBOM %s: %w", destination, err)
+	// Encoding has no context API; check around it and remove output on cancellation.
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
 	}
 	if err := encoder.Encode(file, *bom); err != nil {
-		_ = file.Close()
-		_ = os.Remove(destination)
 		return Result{}, fmt.Errorf("encode SBOM %s: %w", destination, err)
 	}
 	if err := file.Close(); err != nil {
-		_ = os.Remove(destination)
 		return Result{}, fmt.Errorf("close SBOM %s: %w", destination, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	complete = true
 	return resultForSBOM(bom, destination), nil
 }
 

@@ -32,7 +32,9 @@ func scanCommand(opts *commandOptions) *cobra.Command {
 				}
 				return errors.Join(renderImage(cmd, opts, report, true), err)
 			}
-			report, err := inventory.ScanConda(cmd.Context(), inputs, opts.outputDir)
+			ctx, stopProgress := startDiscoveryProgress(cmd.Context(), cmd.ErrOrStderr(), opts.format == "text")
+			report, err := inventory.ScanConda(ctx, inputs, opts.outputDir)
+			err = errors.Join(err, stopProgress())
 			// A text report with nothing recorded would be misleading; the error alone is the answer.
 			if err != nil && opts.format == "text" && len(report.Discovery.Environments) == 0 && len(report.Discovery.Issues) == 0 && len(report.Observations) == 0 {
 				return err

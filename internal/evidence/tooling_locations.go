@@ -100,7 +100,7 @@ func (c *imageCollector) collectRuntime(asserted string) error {
 			return fmt.Errorf("runtime prefix must be a canonical absolute image path")
 		}
 		found := false
-		for _, prefix := range c.prefixes {
+		for _, prefix := range c.confirmed {
 			if err := c.ctx.Err(); err != nil {
 				return err
 			}
@@ -113,11 +113,11 @@ func (c *imageCollector) collectRuntime(asserted string) error {
 		}
 		c.target.RuntimePrefix = asserted
 	}
-	if c.loaded.Config == nil {
+	if c.loaded.Image.Metadata.RawConfig == nil {
 		c.issue("runtime-config", "image startup", "verified image configuration is unavailable")
 		return nil
 	}
-	config := c.loaded.Config.Config
+	config := c.loaded.Image.Metadata.Config.Config
 	bytesRead, entries := 0, 0
 	for _, list := range [][]string{config.Entrypoint, config.Cmd, config.Env} {
 		for _, value := range list {
@@ -197,7 +197,7 @@ func (c *imageCollector) collectRuntime(asserted string) error {
 			continue
 		}
 		if c.target.RuntimePrefix == "" && path.IsAbs(candidate) {
-			for _, prefix := range c.prefixes {
+			for _, prefix := range c.confirmed {
 				if err := c.ctx.Err(); err != nil {
 					return err
 				}

@@ -1,36 +1,34 @@
 package discovery
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestFindConda(t *testing.T) {
+func writeFile(t *testing.T, path, data string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func makePrefix(t *testing.T, prefix string) {
+	t.Helper()
+	writeFile(t, filepath.Join(prefix, "conda-meta", "package.json"), `{"name":"demo","version":"1"}`)
+}
+
+func TestFindRecognizesEnvironmentAndHistory(t *testing.T) {
 	root := t.TempDir()
-	meta := filepath.Join(root, "envs", "research", "conda-meta")
-	if err := os.MkdirAll(meta, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(meta, "python-3.12-0.json"), []byte(`{"name":"python","version":"3.12"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(meta, "history"), []byte("# preamble\n==> 2026-01-01 00:00:00 <==\n+python\n==> 2026-01-02 00:00:00 <==\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	badMeta := filepath.Join(root, "bad", "conda-meta")
-	if err := os.MkdirAll(badMeta, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(badMeta, "bad.json"), []byte(`{"name":"python"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(root, "envs", "research"), filepath.Join(root, "alias")); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	progress := new(Progress)
-	report, err := FindCondaWithProgress([]string{filepath.Join(root, "envs"), root, root}, progress)
+	env := filepath.Join(root, "envs", "research")
+	writeFile(t, filepath.Join(env, "conda-meta", "python-3.12-0.json"), `{"name":"python","version":"3.12"}`)
+	writeFile(t, filepath.Join(env, "conda-meta", "history"), "# preamble\n==> 2026-01-01 00:00:00 <==\n+python\n==> 2026-01-02 00:00:00 <==\n")
+	report, err := Find(context.Background(), []string{filepath.Join(root, "envs"), root, root}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,30 +36,68 @@ func TestFindConda(t *testing.T) {
 		t.Fatalf("environments = %+v, want one", report.Environments)
 	}
 	got := report.Environments[0]
-	if got.Name != "research" || got.Path != filepath.Join(root, "envs", "research") || got.Revision == nil || *got.Revision != 1 {
+	if got.Name != "research" || got.Path != env || got.Revision == nil || *got.Revision != 1 {
 		t.Fatalf("unexpected environment: %+v", got)
 	}
-	if len(report.Issues) != 1 || !strings.Contains(report.Issues[0].Error, "bad.json") {
-		t.Fatalf("issues = %+v, want invalid metadata warning", report.Issues)
-	}
-	if got := progress.Folders.Load(); got != 6 {
-		t.Fatalf("visited folders = %d, want 6 (overlapping roots counted once)", got)
-	}
-	if got := progress.Environments.Load(); got != 1 {
-		t.Fatalf("found environments = %d, want 1", got)
+	if len(report.Roots) != 2 || report.Roots[0] != root {
+		t.Fatalf("requested roots not preserved in order: %+v", report.Roots)
 	}
 }
 
-func TestFindCondaMissingHistory(t *testing.T) {
+// A regular .json filename is enough to be a candidate; content is not decoded.
+func TestFindCandidateIsFilenameOnly(t *testing.T) {
 	root := t.TempDir()
-	meta := filepath.Join(root, "fresh", "conda-meta")
+	writeFile(t, filepath.Join(root, "bad", "conda-meta", "bad.json"), `{"name":"python"}`)
+	writeFile(t, filepath.Join(root, "garbage", "conda-meta", "x.json"), `not json at all`)
+	report, err := Find(context.Background(), []string{root}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Environments) != 2 || len(report.Issues) != 0 {
+		t.Fatalf("report = %+v, want two candidates and no issues", report)
+	}
+}
+
+func TestFindRequiresRegularRecord(t *testing.T) {
+	root := t.TempDir()
+	meta := filepath.Join(root, "noRecord", "conda-meta")
+	if err := os.MkdirAll(filepath.Join(meta, "subdir.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(meta, "readme.txt"), "x")
+	report, err := Find(context.Background(), []string{root}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Environments) != 0 {
+		t.Fatalf("directory named *.json or non-json file treated as a record: %+v", report.Environments)
+	}
+}
+
+func TestFindSymlinkedRecordIsNotEvidence(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.json")
+	writeFile(t, outside, `{"name":"x","version":"1"}`)
+	meta := filepath.Join(root, "linked", "conda-meta")
 	if err := os.MkdirAll(meta, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(`{"name":"pkg","version":"1"}`), 0o644); err != nil {
+	if err := os.Symlink(outside, filepath.Join(meta, "pkg.json")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	report, err := Find(context.Background(), []string{root}, false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := FindCondaWithProgress([]string{root}, nil)
+	if len(report.Environments) != 0 {
+		t.Fatalf("symlinked record confirmed a prefix: %+v", report.Environments)
+	}
+}
+
+func TestFindMissingHistoryIsNil(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "fresh", "conda-meta", "pkg.json"), `{"name":"pkg","version":"1"}`)
+	report, err := Find(context.Background(), []string{root}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,23 +106,122 @@ func TestFindCondaMissingHistory(t *testing.T) {
 	}
 }
 
-func TestFindCondaRejectsNonDirectoryRoot(t *testing.T) {
+func TestFindSkipsHistoryWhenNotRequested(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "file")
-	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+	writeFile(t, filepath.Join(root, "env", "conda-meta", "pkg.json"), `{"name":"pkg","version":"1"}`)
+	writeFile(t, filepath.Join(root, "env", "conda-meta", "history"), "==> a <==\n")
+	report, err := Find(context.Background(), []string{root}, false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := FindCondaWithProgress([]string{path}, nil); err == nil {
+	if len(report.Environments) != 1 || report.Environments[0].Revision != nil {
+		t.Fatalf("history read when not requested: %+v", report.Environments)
+	}
+}
+
+func TestFindRejectsNonDirectoryRoot(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file")
+	writeFile(t, path, "hello")
+	if _, err := Find(context.Background(), []string{path}, false); err == nil {
 		t.Fatal("expected non-directory root to fail")
 	}
 	if err := os.Symlink(root, filepath.Join(root, "link")); err == nil {
-		if _, err := FindCondaWithProgress([]string{filepath.Join(root, "link")}, nil); err == nil {
+		if _, err := Find(context.Background(), []string{filepath.Join(root, "link")}, false); err == nil {
 			t.Fatal("expected symlink root to fail")
 		}
 	}
 }
 
-func TestRevision(t *testing.T) {
+func TestFindNilSlicesNeverEmitted(t *testing.T) {
+	report, err := Find(context.Background(), []string{t.TempDir()}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Environments == nil || report.Issues == nil || report.Hints == nil || report.Roots == nil {
+		t.Fatalf("report arrays must be non-nil: %+v", report)
+	}
+}
+
+func TestFindPrunesNamedDirectories(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{".git", "node_modules", "__pycache__", "site-packages"} {
+		makePrefix(t, filepath.Join(root, name, "env"))
+	}
+	report, err := Find(context.Background(), []string{root}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Environments) != 0 {
+		t.Fatalf("pruned directories produced environments: %+v", report.Environments)
+	}
+}
+
+func TestFindExplicitRootIsNeverPruned(t *testing.T) {
+	root := t.TempDir()
+	site := filepath.Join(root, "site-packages")
+	makePrefix(t, filepath.Join(site, "nested"))
+	report, err := Find(context.Background(), []string{site}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Environments) != 1 || report.Environments[0].Path != filepath.Join(site, "nested") {
+		t.Fatalf("explicit site-packages root was pruned: %+v", report.Environments)
+	}
+}
+
+// A generic pkgs directory with no conda sibling or markers is ordinary content and is
+// scanned; a real conda package cache is skipped.
+func TestFindPkgsIsPrunedOnlyWhenConfirmed(t *testing.T) {
+	root := t.TempDir()
+	realEnv := filepath.Join(root, "project", "pkgs", "env")
+	makePrefix(t, realEnv)
+	cacheEnv := filepath.Join(root, "conda", "pkgs", "cached")
+	makePrefix(t, cacheEnv)
+	writeFile(t, filepath.Join(root, "conda", "conda-meta", "placeholder.json"), `{"name":"x","version":"1"}`)
+	report, err := Find(context.Background(), []string{root}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, env := range report.Environments {
+		got[env.Path] = true
+	}
+	want := []string{realEnv, filepath.Join(root, "conda")}
+	if len(got) != len(want) || !got[want[0]] || !got[want[1]] || got[filepath.Join(cacheEnv)] {
+		t.Fatalf("pkgs confirmation mismatch: got %v, want %v", got, want)
+	}
+}
+
+func TestFindPkgsWithPackageMarkersIsCache(t *testing.T) {
+	root := t.TempDir()
+	cache := filepath.Join(root, "pkgs")
+	writeFile(t, filepath.Join(cache, "urls.txt"), "https://example.invalid/x\n")
+	makePrefix(t, filepath.Join(cache, "pkg-1"))
+	report, err := Find(context.Background(), []string{root}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Environments) != 0 {
+		t.Fatalf("confirmed package cache was scanned: %+v", report.Environments)
+	}
+}
+
+func TestFindCancellationKeepsPartialSortedResults(t *testing.T) {
+	root := t.TempDir()
+	makePrefix(t, filepath.Join(root, "a"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	report, err := Find(ctx, []string{root}, false)
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if report.Environments == nil || report.Issues == nil {
+		t.Fatalf("partial report arrays must be non-nil: %+v", report)
+	}
+}
+
+func TestRevisionParsing(t *testing.T) {
 	tests := []struct {
 		name string
 		data string
@@ -100,7 +235,7 @@ func TestRevision(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := revisionFromReader(strings.NewReader(tt.data))
+			got, err := historyRevision(context.Background(), strings.NewReader(tt.data))
 			if err != nil || (got == nil) != (tt.want == nil) || (got != nil && *got != *tt.want) {
 				t.Fatalf("revision = %v, %v; want %v", got, err, tt.want)
 			}
@@ -108,11 +243,19 @@ func TestRevision(t *testing.T) {
 	}
 }
 
-func intPtr(value int) *int { return &value }
-
 func TestHistoryReaderEnforcesBytesEvenIfFileGrows(t *testing.T) {
-	_, err := revisionFromBoundedReader(strings.NewReader(strings.Repeat("==> transaction <==\n", 100)), 128)
+	_, err := boundedHistoryRevision(context.Background(), strings.NewReader(strings.Repeat("==> transaction <==\n", maxHistoryBytes)))
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("growing history escaped read bound: %v", err)
 	}
 }
+
+func TestHistoryReaderHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := boundedHistoryRevision(ctx, strings.NewReader("==> a <==\n")); err == nil {
+		t.Fatal("cancelled history read must fail")
+	}
+}
+
+func intPtr(value int) *int { return &value }

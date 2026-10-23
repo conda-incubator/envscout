@@ -179,22 +179,6 @@ func TestWriteImageRemovesOutputOnScanFailure(t *testing.T) {
 	}
 }
 
-func TestContextWriter(t *testing.T) {
-	var output bytes.Buffer
-	ctx, cancel := context.WithCancel(context.Background())
-	writer := contextWriter{ctx: ctx, writer: &output}
-	if n, err := writer.Write([]byte("complete")); n != 8 || err != nil {
-		t.Fatalf("write = %d, %v", n, err)
-	}
-	cancel()
-	if n, err := writer.Write([]byte("partial")); n != 0 || !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled write = %d, %v", n, err)
-	}
-	if output.String() != "complete" {
-		t.Fatalf("canceled writer produced extra bytes: %q", output.String())
-	}
-}
-
 func TestWriteImage(t *testing.T) {
 	archive := testimage.Archive(t,
 		[]testimage.Entry{

@@ -41,6 +41,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Locate pinned go-rattler Cargo workspace
+        id: rattler
+        shell: bash
+        run: |
+          go mod download github.com/conda-incubator/go-rattler
+          source_dir="$(go list -m -f '{{.Dir}}' github.com/conda-incubator/go-rattler)"
+          test -n "$source_dir"
+          echo "workspace=$source_dir/internal/native" >> "$GITHUB_OUTPUT"
       - name: Set up MinGW-w64 toolchain (Windows)
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
@@ -58,8 +66,11 @@ jobs:
           toolchain: stable
           target: ${{ matrix.rust-target }}
           cache: true
+          cache-workspaces: ${{ steps.rattler.outputs.workspace }}
+          # Build artifacts live outside the read-only Go module source.
+          cache-targets: false
           cache-directories: .go-rattler-native
-          cache-key: ${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.rust-target }}
+          cache-key: ${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.rust-target }}-${{ hashFiles('go.sum') }}
       - name: Build and test with native go-rattler
         if: runner.os != 'Windows'
         shell: bash

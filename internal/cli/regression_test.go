@@ -167,23 +167,60 @@ func TestScanJSONLocalWritesSingleObjectAndKeepsExistingSBOMs(t *testing.T) {
 
 func TestScanJSONPartialFailureRendersBeforeError(t *testing.T) {
 	root := t.TempDir()
-	meta := filepath.Join(root, "broken", "conda-meta")
-	if err := os.MkdirAll(meta, 0o755); err != nil {
+	good := filepath.Join(root, "good", "conda-meta")
+	if err := os.MkdirAll(good, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(meta, "broken.json"), []byte(`{"name":"broken"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(good, "pkg.json"), []byte(`{"name":"pkg","version":"1"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(t.TempDir())
-	stdout, stderr, err := runCLI(t, context.Background(), "scan", "--format", "json", root)
+	// Discovery confirms a prefix by its directory alone; this record is parsed and
+	// dropped during scanning, so the failure is a failed target, not a discovery issue.
+	bad := filepath.Join(root, "broken", "conda-meta")
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bad, "broken.json"), []byte(`{"name":"broken"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(t.TempDir(), "sboms")
+	stdout, _, err := runCLI(t, context.Background(), "scan", "--format", "json", "--output-dir", outDir, root)
 	if err == nil || ExitCode(err) != 1 {
 		t.Fatalf("partial scan should exit 1: %v", err)
 	}
-	if !json.Valid([]byte(stdout)) || !strings.Contains(stdout, `"status": "incomplete"`) {
-		t.Fatalf("partial JSON report missing: %s", stdout)
+	var report struct {
+		Status       string `json:"status"`
+		Observations []struct {
+			Environment struct {
+				Name string `json:"name"`
+			} `json:"environment"`
+			Error  string `json:"error"`
+			Result struct {
+				Path string `json:"path"`
+			} `json:"result"`
+		} `json:"observations"`
 	}
-	if !strings.Contains(stderr, "warning: ") {
-		t.Fatalf("discovery warning not on stderr: %s", stderr)
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("partial JSON report missing: %v: %s", err, stdout)
+	}
+	if report.Status != "incomplete" || len(report.Observations) != 2 {
+		t.Fatalf("unexpected partial report: %s", stdout)
+	}
+	var failed, kept int
+	for _, observation := range report.Observations {
+		switch {
+		case observation.Error != "":
+			failed++
+		case observation.Result.Path != "":
+			kept++
+		}
+	}
+	if failed != 1 || kept != 1 {
+		t.Fatalf("want one failed target and one kept SBOM, got failed=%d kept=%d: %s", failed, kept, stdout)
+	}
+	entries, err := os.ReadDir(outDir)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("both candidate SBOMs should be retained on disk: %v %v", entries, err)
 	}
 }
 
@@ -300,15 +337,16 @@ func (c *countdownContext) Err() error {
 // TestFindCancelledMidWalkKeepsPartialReport finds the call budget at which the
 // walk has recorded its one environment and then stops, and requires the JSON
 // report to keep that environment with exit 130.
+// The exact number of Err calls a walk makes is an implementation detail, so the
+// budget is searched rather than pinned. The invariant: some budget cancels after
+// the environment is recorded, and that run keeps the environment in valid JSON
+// with exit 130.
 func TestFindCancelledMidWalkKeepsPartialReport(t *testing.T) {
 	root := condaRoot(t)
-	for limit := 1; limit < 200; limit++ {
+	for limit := 1; limit < 500; limit++ {
 		ctx := &countdownContext{Context: context.Background(), limit: limit}
 		stdout, _, err := runCLI(t, ctx, "find", "--format", "json", root)
-		if ExitCode(err) != 130 {
-			continue
-		}
-		if !strings.Contains(stdout, `"name": "demo"`) {
+		if ExitCode(err) != 130 || !strings.Contains(stdout, `"name": "demo"`) {
 			continue
 		}
 		if !json.Valid([]byte(stdout)) {

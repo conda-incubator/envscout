@@ -2,21 +2,24 @@ package evidence
 
 import (
 	"archive/tar"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/anaconda/envscout/internal/discovery"
 	"github.com/anaconda/envscout/internal/imageinput"
+	"github.com/anaconda/envscout/internal/inventory"
 	"github.com/anchore/stereoscope/pkg/file"
 	"github.com/anchore/stereoscope/pkg/filetree"
 	"github.com/anchore/stereoscope/pkg/filetree/filenode"
-	"github.com/anchore/stereoscope/pkg/image"
+	"github.com/anchore/syft/syft/pkg"
+	"github.com/anchore/syft/syft/source"
 )
 
 const (
@@ -28,18 +31,35 @@ const (
 var imageCapabilities = []string{"prefixes", "history", "tooling-prefix", "final-cache", "cache-link-dependencies", "runtime-config", "os-package-tools", "shell-tools", "layer-retention"}
 
 type imageCollector struct {
-	ctx      context.Context
-	loaded   *imageinput.Loaded
-	tree     filetree.Reader
-	target   Target
-	prefixes []Prefix
-	caches   map[string]bool
-	limited  map[string]bool
+	ctx     context.Context
+	loaded  *imageinput.Loaded
+	tree    filetree.Reader
+	target  Target
+	caches  map[string]bool
+	limited map[string]bool
+	// records holds facts from the one final conda-meta parse, keyed by prefix. A prefix is
+	// present only when at least one valid record was parsed for it.
+	records map[string]*prefixRecords
+	// confirmed holds every prefix with a valid final record. Runtime resolution reads it
+	// even when the prefix capabilities are not exported.
+	confirmed []Prefix
+}
+
+// prefixRecords is the parsed final-record facts for one prefix. Membership in the map is
+// the validity signal; there is no separate flag.
+type prefixRecords struct {
+	tooling bool
+	// cacheRoots are cache roots named by the record's ExtractedPackageDir or Link.Source
+	// (parent directory), kept only when the root is a real directory in the final tree.
+	cacheRoots []string
 }
 
 // CollectImage borrows an already verified image. Loading and cleanup belong to the caller.
-func CollectImage(ctx context.Context, loaded *imageinput.Loaded, req Request) (Target, error) {
-	target := Target{Kind: "oci-archive", Roots: []string{}, Prefixes: []Prefix{}, Archives: []Artifact{}, Extracted: []Artifact{}, Tools: []Artifact{}, Shells: []Artifact{}, Retained: []Artifact{}, Coverage: map[string]string{}, Issues: []Issue{}}
+// On cancellation it returns the partial target with every selected capability marked
+// Partial, together with the context error. Positive evidence gathered before the cancel
+// is kept.
+func CollectImage(ctx context.Context, loaded *imageinput.Loaded, req Request) (target Target, err error) {
+	target = Target{Kind: "oci-archive", Roots: []string{}, Prefixes: []Prefix{}, Archives: []Artifact{}, Extracted: []Artifact{}, Tools: []Artifact{}, Shells: []Artifact{}, Retained: []Artifact{}, Coverage: map[string]string{}, Issues: []Issue{}}
 	for _, capability := range imageCapabilities {
 		target.Coverage[capability] = NotCollected
 		if Requested(req, capability) {
@@ -65,134 +85,122 @@ func CollectImage(ctx context.Context, loaded *imageinput.Loaded, req Request) (
 	if identity.Variant != "" {
 		target.ID += "/" + identity.Variant
 	}
-	c := imageCollector{ctx: ctx, loaded: loaded, tree: tree, target: target, prefixes: []Prefix{}, caches: map[string]bool{}, limited: map[string]bool{}}
-	defer func() { c.sort() }()
+	c := imageCollector{ctx: ctx, loaded: loaded, tree: tree, target: target, caches: map[string]bool{}, limited: map[string]bool{}, records: map[string]*prefixRecords{}}
+	defer func() {
+		c.sort()
+		target = c.target
+		if err != nil || ctx.Err() != nil {
+			err = errors.Join(err, c.cancelled(ctx))
+		}
+	}()
+	err = c.run(req)
+	return c.target, err
+}
+
+// cancelled marks every selected capability Partial when collection was cancelled, so a
+// partial result can never report Complete. It returns the context cause, or nil.
+func (c *imageCollector) cancelled(ctx context.Context) error {
+	cause := ctx.Err()
+	if cause == nil {
+		return nil
+	}
+	for capability, coverage := range c.target.Coverage {
+		if coverage != NotCollected {
+			c.target.Coverage[capability] = Partial
+		}
+	}
+	return cause
+}
+
+// run executes the requested phases in dependency order. Each phase returns on error or
+// cancellation; the caller then reports partial coverage.
+func (c *imageCollector) run(req Request) error {
 	needsPrefixes := Requested(req, "prefixes") || Requested(req, "history") || Requested(req, "tooling-prefix") || Requested(req, "runtime-config")
-	if needsPrefixes {
-		discoveryImage := loaded.Image
-		if !Requested(req, "history") {
-			// Discovery also reads history by default. A borrowed view hides just
-			// those entries so disabling history avoids its I/O, not only output.
-			discoveryImage = &image.Image{Layers: []*image.Layer{{SquashedTree: withoutImageHistory{Reader: tree, ctx: ctx}}}, FileCatalog: loaded.Image.FileCatalog}
-		}
-		report, err := discovery.FindImageConda(ctx, discoveryImage)
-		if err != nil {
-			return c.target, err
-		}
-		for _, issue := range report.Issues {
-			isCondaEvidence := strings.Contains(issue.Path, "/conda-meta") || strings.Contains(issue.Error, "conda") || strings.Contains(issue.Error, "discovery") || strings.Contains(issue.Error, "walk image")
-			if !isCondaEvidence {
-				continue
-			}
-			capability := "prefixes"
-			if path.Base(issue.Path) == "history" {
-				capability = "history"
-			}
-			c.issue(capability, issue.Path, issue.Error)
-			if capability == "prefixes" {
-				for _, dependent := range []string{"history", "tooling-prefix", "runtime-config"} {
-					c.issue(dependent, issue.Path, "prefix discovery is incomplete")
-				}
-			}
-		}
-		for _, env := range report.Environments {
-			if err := ctx.Err(); err != nil {
-				return c.target, err
-			}
-			if len(c.prefixes) >= imageEntryLimit {
-				for _, cap := range c.selected("prefixes", "history", "tooling-prefix", "runtime-config") {
-					c.limit(cap, env.Path, "prefix entry limit exceeded (10000)")
-				}
-				break
-			}
-			prefix := Prefix{Path: env.Path}
-			if Requested(req, "history") {
-				prefix.Revision = env.Revision
-			}
-			c.prefixes = append(c.prefixes, prefix)
-		}
-	}
 	needsCaches := Requested(req, "final-cache") || Requested(req, "cache-link-dependencies") || Requested(req, "layer-retention")
-	if Requested(req, "tooling-prefix") || needsCaches {
-		caps := c.selected("tooling-prefix", "final-cache", "cache-link-dependencies", "layer-retention")
-		if err := c.collectMarkers(caps, needsCaches); err != nil {
-			return c.target, err
-		}
-	}
-	if Requested(req, "prefixes") || Requested(req, "history") || Requested(req, "tooling-prefix") {
-		c.target.Prefixes = append(c.target.Prefixes, c.prefixes...)
-		if !Requested(req, "tooling-prefix") {
-			for i := range c.target.Prefixes {
-				c.target.Prefixes[i].Tooling = false
-			}
-		}
-	}
-	if Requested(req, "final-cache") {
-		if err := c.collectCache(); err != nil {
-			return c.target, err
-		}
-	}
-	if Requested(req, "cache-link-dependencies") {
-		if err := c.collectCacheLinks(); err != nil {
-			return c.target, err
-		}
-	}
-	if Requested(req, "runtime-config") {
-		if err := c.collectRuntime(req.RuntimePrefix); err != nil {
-			return c.target, err
-		}
-	}
-	for _, capability := range []string{"os-package-tools", "shell-tools"} {
-		if Requested(req, capability) {
-			if err := c.collectTools(capability); err != nil {
-				return c.target, err
-			}
-		}
-	}
-	if Requested(req, "layer-retention") {
-		if err := c.collectLayers(); err != nil {
-			return c.target, err
-		}
-	}
-	c.sort()
-	return c.target, ctx.Err()
-}
-
-type withoutImageHistory struct {
-	filetree.Reader
-	ctx context.Context
-}
-
-func (tree withoutImageHistory) Walk(visit func(file.Path, filenode.FileNode) error, conditions *filetree.WalkConditions) error {
-	bounded := *conditions
-	visited, capped := 0, false
-	bounded.ShouldTerminate = func(p file.Path, node filenode.FileNode) bool {
-		if tree.ctx.Err() != nil {
-			return true
-		}
-		if visited >= imagePathLimit {
-			capped = true
-			return true
-		}
-		return conditions.ShouldTerminate != nil && conditions.ShouldTerminate(p, node)
-	}
-	err := tree.Reader.Walk(func(p file.Path, node filenode.FileNode) error {
-		if err := tree.ctx.Err(); err != nil {
+	var candidates []discovery.Environment
+	if needsPrefixes {
+		report, err := discovery.FindImage(c.ctx, c.loaded.Image, Requested(req, "history"))
+		if err != nil {
 			return err
 		}
-		visited++
-		if path.Base(string(p)) == "history" && path.Base(path.Dir(string(p))) == "conda-meta" {
-			return nil
+		c.reportIssues(report.Issues)
+		candidates = report.Environments
+	}
+	// Records are needed for prefix confirmation, tooling, cache roots, and layer tooling.
+	// Tool and shell scans do not need them.
+	var recordErr error
+	if needsPrefixes || needsCaches {
+		recordErr = c.parseFinalRecords()
+	}
+	if needsPrefixes {
+		c.confirmPrefixes(req, candidates)
+	}
+	if recordErr != nil {
+		return recordErr
+	}
+	for _, step := range []struct {
+		enabled bool
+		collect func() error
+	}{
+		{needsCaches, func() error { return c.collectMarkers(true) }},
+		{Requested(req, "final-cache"), c.collectCache},
+		{Requested(req, "cache-link-dependencies"), c.collectCacheLinks},
+		{Requested(req, "runtime-config"), func() error { return c.collectRuntime(req.RuntimePrefix) }},
+		{Requested(req, "os-package-tools"), func() error { return c.collectTools("os-package-tools") }},
+		{Requested(req, "shell-tools"), func() error { return c.collectTools("shell-tools") }},
+		{Requested(req, "layer-retention"), c.collectLayers},
+	} {
+		if step.enabled {
+			if err := step.collect(); err != nil {
+				return err
+			}
 		}
-		return visit(p, node)
-	}, &bounded)
-	if tree.ctx.Err() != nil {
-		return tree.ctx.Err()
 	}
-	if capped {
-		return fmt.Errorf("image discovery exceeds %d visited paths", imagePathLimit)
+	return c.ctx.Err()
+}
+
+// reportIssues routes discovery issues about conda evidence to the affected capabilities.
+func (c *imageCollector) reportIssues(issues []discovery.Issue) {
+	for _, issue := range issues {
+		if path.Base(issue.Path) == "history" {
+			c.issue("history", issue.Path, issue.Error)
+			continue
+		}
+		for _, capability := range c.selected("prefixes", "history", "tooling-prefix", "runtime-config") {
+			c.issue(capability, issue.Path, issue.Error)
+		}
 	}
-	return err
+}
+
+// confirmPrefixes uses already parsed records only, so positives survive cancellation.
+func (c *imageCollector) confirmPrefixes(req Request, candidates []discovery.Environment) {
+	dependents := c.selected("prefixes", "history", "tooling-prefix", "runtime-config")
+	for _, env := range candidates {
+		entry, ok := c.records[env.Path]
+		if !ok {
+			for _, capability := range dependents {
+				c.issue(capability, env.Path, "candidate prefix has no valid final conda record")
+			}
+			continue
+		}
+		if len(c.confirmed) >= imageEntryLimit {
+			for _, capability := range dependents {
+				c.limit(capability, env.Path, "prefix entry limit exceeded (10000)")
+			}
+			break
+		}
+		prefix := Prefix{Path: env.Path, Tooling: entry.tooling}
+		if Requested(req, "history") {
+			prefix.Revision = env.Revision
+		}
+		c.confirmed = append(c.confirmed, prefix)
+		if Requested(req, "prefixes") || Requested(req, "history") || Requested(req, "tooling-prefix") {
+			if !Requested(req, "tooling-prefix") {
+				prefix.Tooling = false
+			}
+			c.target.Prefixes = append(c.target.Prefixes, prefix)
+		}
+	}
 }
 
 func (c *imageCollector) selected(caps ...string) []string {
@@ -270,34 +278,90 @@ func (c *imageCollector) walk(tree filetree.Reader, capabilities []string, visit
 	return nil
 }
 
-type condaRecord struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-func plausibleRecord(data []byte) (condaRecord, bool) {
-	var record condaRecord
-	if json.Unmarshal(data, &record) != nil || len(record.Name) == 0 || len(record.Name) > 256 || len(record.Version) == 0 || len(record.Version) > 256 {
+// readRecord decodes one conda metadata document into the canonical Syft type. A record
+// needs a non-empty name and version, the same rule inventory applies to final records.
+func readRecord(data []byte) (pkg.CondaMetaPackage, bool) {
+	var record pkg.CondaMetaPackage
+	if json.Unmarshal(data, &record) != nil || record.Name == "" || record.Version == "" {
 		return record, false
-	}
-	for _, value := range []string{record.Name, record.Version} {
-		for _, ch := range value {
-			if ch <= ' ' || ch >= 127 || ch == '/' || ch == '\\' {
-				return record, false
-			}
-		}
-	}
-	for _, ch := range record.Name {
-		allowed := ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_' || ch == '.'
-		if !allowed {
-			return record, false
-		}
 	}
 	return record, true
 }
 
-func toolingRecord(record condaRecord) bool {
-	return record.Name == "conda" || record.Name == "mamba" || record.Name == "micromamba"
+// toolingName reports whether a parsed package is an installed conda tool.
+func toolingName(name string) bool {
+	return name == "conda" || name == "mamba" || name == "micromamba"
+}
+
+// cacheRootFromRecord maps a build-host extracted-package path to its parent cache root.
+// The build-host path is only a hint: the root must be an absolute POSIX directory that
+// exists in the final image, so an absent path never produces a collection issue.
+func (c *imageCollector) cacheRootFromRecord(extracted string) (string, bool) {
+	if extracted == "" || !path.IsAbs(extracted) || strings.ContainsAny(extracted, "\\\x00") {
+		return "", false
+	}
+	root := path.Dir(path.Clean(extracted))
+	if root == "/" {
+		return "", false
+	}
+	node, ok := c.tree.TreeReader().Node(filenode.IDByPath(file.Path(root))).(*filenode.FileNode)
+	if !ok || node.FileType != file.TypeDirectory {
+		return "", false
+	}
+	return root, true
+}
+
+// parseFinalRecords runs the conda-only cataloger once over the final image. It is
+// cancellation-safe: records Syft parsed before a cancel or parse error are still applied,
+// and the context cause is returned for the caller to report.
+func (c *imageCollector) parseFinalRecords() error {
+	src := inventory.ImageSource(c.loaded.Image, c.loaded.Identity.Input)
+	pkgs, err := inventory.CondaRecords(c.ctx, src, source.SquashedScope)
+	for _, p := range pkgs {
+		meta, ok := p.Metadata.(pkg.CondaMetaPackage)
+		if !ok {
+			continue
+		}
+		for _, location := range p.Locations.ToSlice() {
+			real := location.RealPath
+			// Syft follows links. Only a direct, non-alias conda-meta record establishes a prefix.
+			if real != location.AccessPath || !strings.HasSuffix(real, ".json") || path.Base(path.Dir(real)) != "conda-meta" {
+				continue
+			}
+			prefix := path.Dir(path.Dir(real))
+			entry := c.records[prefix]
+			if entry == nil {
+				entry = &prefixRecords{}
+				c.records[prefix] = entry
+			}
+			if toolingName(meta.Name) {
+				entry.tooling = true
+			}
+			for _, extracted := range []string{meta.ExtractedPackageDir, linkSource(meta)} {
+				if root, ok := c.cacheRootFromRecord(extracted); ok {
+					entry.cacheRoots = append(entry.cacheRoots, root)
+				}
+			}
+		}
+	}
+	if cerr := c.ctx.Err(); cerr != nil {
+		return cerr
+	}
+	if err != nil {
+		// Malformed or unparsable records are partial evidence, not a fatal error. Valid
+		// records parsed alongside them stay positive.
+		for _, capability := range c.selected("prefixes", "history", "tooling-prefix", "runtime-config", "final-cache", "layer-retention") {
+			c.issue(capability, "/", fmt.Sprintf("final conda records are incomplete: %v", err))
+		}
+	}
+	return nil
+}
+
+func linkSource(meta pkg.CondaMetaPackage) string {
+	if meta.Link == nil {
+		return ""
+	}
+	return meta.Link.Source
 }
 
 func (c *imageCollector) readReference(ref file.Reference, limit int64, whole bool) ([]byte, error) {
@@ -348,6 +412,8 @@ func (r evidenceContextReader) Read(p []byte) (int, error) {
 	return r.reader.Read(p)
 }
 
+// cacheMarker classifies a standalone info/index.json marker. Site-packages and conda-meta
+// are never cache markers.
 func cacheMarker(p string) (string, string, bool) {
 	if !strings.HasSuffix(p, "/info/index.json") || strings.Contains(p, "/site-packages/") || strings.Contains(p, "/conda-meta/") {
 		return "", "", false
@@ -360,65 +426,80 @@ func cacheMarker(p string) (string, string, bool) {
 	return root, packagePath, true
 }
 
-func (c *imageCollector) collectMarkers(capabilities []string, caches bool) error {
-	visited, records := 0, 0
-	return c.walk(c.tree, capabilities, &visited, func(p file.Path, node filenode.FileNode) error {
-		name := string(p)
-		isTooling := path.Base(path.Dir(name)) == "conda-meta" && path.Ext(name) == ".json"
+// collectMarkers records tooling-derived and standalone cache roots. Conda-meta records were
+// parsed once by parseFinalRecords and are not read again. Standalone info/index markers
+// are found by a targeted glob, not a full tree walk.
+func (c *imageCollector) collectMarkers(caches bool) error {
+	if caches {
+		for prefix, entry := range c.records {
+			if entry.tooling {
+				c.caches[path.Join(prefix, "pkgs")] = true
+			}
+			for _, root := range entry.cacheRoots {
+				c.caches[root] = true
+			}
+		}
+	}
+	if !caches {
+		return nil
+	}
+	searcher := c.loaded.Image.SquashedSearchContext
+	if searcher == nil {
+		searcher = filetree.NewSearchContext(c.tree, c.loaded.Image.FileCatalog)
+	}
+	refs, err := searcher.SearchByGlob("**/info/index.json")
+	if err := c.ctx.Err(); err != nil {
+		return err
+	}
+	caps := c.selected("final-cache", "cache-link-dependencies", "layer-retention")
+	if err != nil {
+		for _, capability := range caps {
+			c.issue(capability, "/", fmt.Sprintf("search cache markers: %v", err))
+		}
+		return nil
+	}
+	markers := 0
+	for _, res := range refs {
+		if err := c.ctx.Err(); err != nil {
+			return err
+		}
+		name := string(res.RequestPath)
 		root, _, isCache := cacheMarker(name)
-		if !isTooling && (!caches || !isCache) {
-			return nil
+		if !isCache {
+			continue
 		}
-		caps := capabilities
-		if !isTooling {
-			caps = c.selected("final-cache", "cache-link-dependencies", "layer-retention")
-		}
-		if records >= imageEntryLimit {
-			for _, cap := range caps {
-				c.limit(cap, name, "metadata entry limit exceeded (10000)")
+		if markers >= imageEntryLimit {
+			for _, capability := range caps {
+				c.limit(capability, name, "metadata entry limit exceeded (10000)")
 			}
-			return nil
+			break
 		}
-		records++
-		if node.FileType != file.TypeRegular || node.Reference == nil {
-			for _, cap := range caps {
-				c.issue(cap, name, "conda marker is not a regular file")
+		markers++
+		if res.Reference == nil || string(res.RealPath) != name {
+			for _, capability := range caps {
+				c.issue(capability, name, "conda marker is not a regular file")
 			}
-			return nil
+			continue
 		}
-		data, err := c.readReference(*node.Reference, imageMetadataLimit, true)
+		data, err := c.readReference(*res.Reference, imageMetadataLimit, true)
 		if err != nil {
 			if c.ctx.Err() != nil {
 				return c.ctx.Err()
 			}
-			for _, cap := range caps {
-				c.issue(cap, name, err.Error())
+			for _, capability := range caps {
+				c.issue(capability, name, err.Error())
 			}
-			return nil
+			continue
 		}
-		record, valid := plausibleRecord(data)
-		if !valid {
-			for _, cap := range caps {
-				c.issue(cap, name, "invalid conda package marker")
+		if _, valid := readRecord(data); !valid {
+			for _, capability := range caps {
+				c.issue(capability, name, "invalid conda package marker")
 			}
-			return nil
+			continue
 		}
-		if caches && isCache {
-			c.caches[root] = true
-		}
-		if isTooling && toolingRecord(record) {
-			prefix := path.Dir(path.Dir(name))
-			if caches {
-				c.caches[path.Join(prefix, "pkgs")] = true
-			}
-			for i := range c.prefixes {
-				if c.prefixes[i].Path == prefix {
-					c.prefixes[i].Tooling = true
-				}
-			}
-		}
-		return nil
-	})
+		c.caches[root] = true
+	}
+	return c.ctx.Err()
 }
 
 func within(p, root string) bool {
@@ -535,7 +616,7 @@ func (c *imageCollector) collectCache() error {
 			c.issue("final-cache", name, err.Error())
 			return nil
 		}
-		if _, valid := plausibleRecord(data); !valid {
+		if _, valid := readRecord(data); !valid {
 			c.issue("final-cache", name, "invalid extracted cache marker")
 			return nil
 		}
@@ -829,23 +910,13 @@ func (c *imageCollector) collectCacheLinks() error {
 }
 
 func (c *imageCollector) sort() {
-	sort.Slice(c.target.Prefixes, func(i, j int) bool { return c.target.Prefixes[i].Path < c.target.Prefixes[j].Path })
+	slices.SortFunc(c.target.Prefixes, func(a, b Prefix) int { return cmp.Compare(a.Path, b.Path) })
 	for _, artifacts := range [][]Artifact{c.target.Archives, c.target.Extracted, c.target.Tools, c.target.Shells, c.target.Retained} {
-		sort.Slice(artifacts, func(i, j int) bool {
-			if artifacts[i].Path == artifacts[j].Path {
-				return artifacts[i].Layer < artifacts[j].Layer
-			}
-			return artifacts[i].Path < artifacts[j].Path
+		slices.SortFunc(artifacts, func(a, b Artifact) int {
+			return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.Layer, b.Layer))
 		})
 	}
-	sort.Slice(c.target.Issues, func(i, j int) bool {
-		a, b := c.target.Issues[i], c.target.Issues[j]
-		if a.Capability != b.Capability {
-			return a.Capability < b.Capability
-		}
-		if a.Path != b.Path {
-			return a.Path < b.Path
-		}
-		return a.Message < b.Message
+	slices.SortFunc(c.target.Issues, func(a, b Issue) int {
+		return cmp.Or(cmp.Compare(a.Capability, b.Capability), cmp.Compare(a.Path, b.Path), cmp.Compare(a.Message, b.Message))
 	})
 }

@@ -111,11 +111,26 @@ func TestImagePartialDiscoveryStillWritesSBOM(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetErr(&warnings)
 	cmd.SetArgs([]string{"scan", "--source", "oci-archive", "--platform", "linux/amd64", archive})
-	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "inspection incomplete") {
+	// The malformed record is a candidate, not a discovery issue. Its conda content
+	// surfaces as an unknown file coordinate, so the image scan is incomplete while
+	// the good prefix's SBOM is still written and reported.
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "image inspection incomplete") {
 		t.Fatalf("partial image scan should fail visibly: %v", err)
 	}
 	files, err := os.ReadDir("sboms")
-	if err != nil || len(files) != 1 || !strings.Contains(output.String(), "Summary: incomplete") || !strings.Contains(warnings.String(), "warning: image path") {
-		t.Fatalf("missing partial report/SBOM: %v %s %s", err, output.String(), warnings.String())
+	if err != nil || len(files) != 1 {
+		t.Fatalf("expected the whole-image SBOM to be kept: %v %v", files, err)
 	}
+	if !strings.Contains(output.String(), "Summary: incomplete") || !strings.Contains(output.String(), "SBOM: "+mustAbs(t, "sboms")) {
+		t.Fatalf("report must show the kept SBOM and incomplete summary: %s", output.String())
+	}
+}
+
+func mustAbs(t *testing.T, path string) string {
+	t.Helper()
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
 }

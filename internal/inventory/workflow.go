@@ -71,7 +71,7 @@ func ScanConda(ctx context.Context, roots []string, outputDir string) (report Sc
 		report.TotalDuration = time.Since(started)
 		return report, fmt.Errorf("resolve output directory: %w", err)
 	}
-	discovered, err := discovery.FindCondaFacts(ctx, roots, nil, true)
+	discovered, err := discovery.Find(ctx, roots, true)
 	report.Discovery = discovered
 	report.DiscoveryDuration = time.Since(started)
 	if err != nil {
@@ -90,6 +90,14 @@ func ScanConda(ctx context.Context, roots []string, outputDir string) (report Sc
 			observation.Result = Result{}
 		} else {
 			observation.Pixi = PixiLockSummary(env.Path)
+			// The SBOM is kept either way, but unknown coordinates or a prefix with no
+			// valid conda record make the observation incomplete, so the scan exits non-zero.
+			switch {
+			case result.Conda == 0:
+				observation.Error = "no valid conda package metadata in prefix"
+			case result.Unknowns > 0:
+				observation.Error = fmt.Sprintf("%d unknown file coordinate(s) in SBOM", result.Unknowns)
+			}
 		}
 		report.Observations = append(report.Observations, observation)
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -133,7 +141,7 @@ func scanFailures(report ScanReport) int {
 // ImageReport is the business outcome of InspectImage. Result is nil when no SBOM
 // was requested or the scan failed; ScanError carries the scan failure text.
 type ImageReport struct {
-	discovery.ImageReport
+	discovery.Report
 	Image         imageinput.Identity `json:"image"`
 	Started       time.Time           `json:"started_at"`
 	LoadDuration  time.Duration       `json:"load_duration_ns"`
@@ -153,9 +161,9 @@ type ImageReport struct {
 func InspectImage(ctx context.Context, input, platform, outputDir string) (report ImageReport, err error) {
 	started := time.Now()
 	report = ImageReport{
-		Started:     started,
-		ImageReport: discovery.ImageReport{SchemaVersion: 1, Source: "oci-archive", Scope: "squashed", Environments: []discovery.Environment{}, Issues: []discovery.Issue{}},
-		Status:      StatusIncomplete,
+		Started: started,
+		Report:  discovery.Report{SchemaVersion: 1, Source: "oci-archive", Scope: "squashed", Roots: []string{}, Hints: []discovery.HintSummary{}, Environments: []discovery.Environment{}, Issues: []discovery.Issue{}},
+		Status:  StatusIncomplete,
 	}
 	defer func() {
 		// Cleanup happens before this runs, so TotalDuration covers it.
@@ -185,8 +193,8 @@ func InspectImage(ctx context.Context, input, platform, outputDir string) (repor
 	report.Image = loaded.Identity
 	report.LoadDuration = time.Since(started)
 
-	found, err := discovery.FindImageConda(ctx, loaded.Image)
-	report.ImageReport = found
+	found, err := discovery.FindImage(ctx, loaded.Image, true)
+	report.Report = found
 	if err != nil {
 		return report, err
 	}
@@ -199,6 +207,10 @@ func InspectImage(ctx context.Context, input, platform, outputDir string) (repor
 			report.ScanError = writeErr.Error()
 		} else {
 			report.Result = &result
+			if len(found.Environments) > 0 && result.Conda == 0 {
+				scanErr = fmt.Errorf("no valid conda package metadata in discovered image prefixes")
+				report.ScanError = scanErr.Error()
+			}
 		}
 	}
 	report.Status = StatusCompleted

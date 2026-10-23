@@ -176,11 +176,14 @@ func TestFindKnownLocationsJSON(t *testing.T) {
 	}
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("CONDA_PREFIX", "")
-	t.Setenv("MAMBA_ROOT_PREFIX", "")
-	t.Setenv("CONDA_ENVS_PATH", "")
-	t.Setenv("PIXI_HOME", "")
-	t.Setenv("PIXI_PROJECT_ROOT", "")
+	// Scrub every environment source the known-location scan reads so the host's
+	// real conda, pixi and Windows install locations cannot leak into the report.
+	for _, key := range []string{
+		"CONDA_PREFIX", "MAMBA_ROOT_PREFIX", "CONDA_ENVS_PATH", "CONDA_ROOT", "CONDARC",
+		"PIXI_HOME", "PIXI_PROJECT_ROOT", "LOCALAPPDATA", "PROGRAMDATA",
+	} {
+		t.Setenv(key, "")
+	}
 	t.Chdir(home)
 	meta := filepath.Join(home, "miniconda3", "envs", "demo", "conda-meta")
 	if err := os.MkdirAll(meta, 0o755); err != nil {
@@ -276,7 +279,7 @@ func TestScanWritesOneSBOMPerPrefix(t *testing.T) {
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "2 failed target(s)") {
 		t.Fatalf("repeated scan should not replace SBOMs: %v", err)
 	}
-	if !strings.Contains(output.String(), "Summary: incomplete; 2 conda environments found, 0 SBOMs written, 2 failed scans, 0 discovery issues") || !strings.Contains(output.String(), "SBOM: not written (SBOM already exists:") {
+	if !strings.Contains(output.String(), "Summary: incomplete; 2 conda environments found, 0 SBOMs written, 2 failed scans, 0 discovery issues") || !strings.Contains(output.String(), "SBOM already exists") {
 		t.Fatalf("repeated scan must report failures and retain previous SBOMs: %s", output.String())
 	}
 }
@@ -297,7 +300,7 @@ func TestScanWithoutEnvironments(t *testing.T) {
 	}
 }
 
-func TestScanReportsPartialDiscovery(t *testing.T) {
+func TestScanReportsPartialInventory(t *testing.T) {
 	root := t.TempDir()
 	meta := filepath.Join(root, "broken", "conda-meta")
 	if err := os.MkdirAll(meta, 0o755); err != nil {
@@ -306,16 +309,23 @@ func TestScanReportsPartialDiscovery(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(meta, "broken.json"), []byte(`{"name":"broken"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	good := filepath.Join(root, "good", "conda-meta")
+	if err := os.MkdirAll(good, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(good, "pkg.json"), []byte(`{"name":"pkg","version":"1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	t.Chdir(t.TempDir())
 	cmd := New()
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 	cmd.SetArgs([]string{"scan", root})
-	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "1 discovery issue(s)") {
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "scan incomplete: 1 failed target(s)") {
 		t.Fatalf("expected incomplete scan error, got %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Summary: incomplete; 0 conda environments found, 0 SBOMs written, 0 failed scans, 1 discovery issues") || !strings.Contains(stderr.String(), "warning: ") {
-		t.Fatalf("missing partial discovery evidence: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	if !strings.Contains(stdout.String(), "Summary: incomplete; 2 conda environments found, 1 SBOMs written, 1 failed scans, 0 discovery issues") {
+		t.Fatalf("summary must count the failed candidate and the kept good prefix: stdout=%s", stdout.String())
 	}
 }

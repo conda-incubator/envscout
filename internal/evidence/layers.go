@@ -1,12 +1,15 @@
 package evidence
 
 import (
+	"cmp"
+	"encoding/json"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/anchore/stereoscope/pkg/file"
 	"github.com/anchore/stereoscope/pkg/filetree/filenode"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
 type layerCacheFile struct {
@@ -17,15 +20,29 @@ type layerCacheFile struct {
 	packagePath string
 }
 
+func cacheAncestor(p string, roots map[string]bool) string {
+	for p != "/" && !roots[p] {
+		p = path.Dir(p)
+	}
+	if roots[p] {
+		return p
+	}
+	return ""
+}
+
 // Historical trees contain diff entries, not runtime visibility. Keep their
 // reference identities until all confirmed cache contexts and final links are known.
 func (c *imageCollector) collectLayers() error {
 	const capability = "layer-retention"
-	if c.loaded.Manifest == nil || c.loaded.Config == nil {
-		c.issue(capability, "/", "verified layer manifest/config descriptors are unavailable")
+	// Compressed descriptors come only from the raw manifest. Stereoscope's
+	// Layer.Metadata.Digest is the uncompressed diffID and its Size is often zero.
+	var manifest v1.Manifest
+	if err := json.Unmarshal(c.loaded.Image.Metadata.RawManifest, &manifest); err != nil {
+		c.issue(capability, "/", "verified layer manifest is unavailable")
 		return nil
 	}
-	if len(c.loaded.Manifest.Layers) != len(c.loaded.Image.Layers) || len(c.loaded.Config.RootFS.DiffIDs) != len(c.loaded.Image.Layers) {
+	diffIDs := c.loaded.Image.Metadata.Config.RootFS.DiffIDs
+	if len(manifest.Layers) != len(c.loaded.Image.Layers) || len(diffIDs) != len(c.loaded.Image.Layers) {
 		c.issue(capability, "/", "verified layer descriptors do not match loaded layers")
 		return nil
 	}
@@ -77,28 +94,24 @@ func (c *imageCollector) collectLayers() error {
 				c.issue(capability, name, err.Error())
 				return nil
 			}
-			record, valid := plausibleRecord(data)
+			record, valid := readRecord(data)
 			if !valid {
 				c.issue(capability, name, "invalid historical conda marker")
 				return nil
 			}
-			if marker {
-				context := markers[name]
-				context.root, context.packagePath = root, packagePath
-				if context.refs == nil {
-					context.refs = map[file.ID]bool{}
-				}
-				context.refs[node.Reference.ID()] = true
-				markers[name] = context
-			} else if toolingRecord(record) {
-				context := markers[name]
-				context.root = path.Join(path.Dir(path.Dir(name)), "pkgs")
-				if context.refs == nil {
-					context.refs = map[file.ID]bool{}
-				}
-				context.refs[node.Reference.ID()] = true
-				markers[name] = context
+			if !marker && !toolingName(record.Name) {
+				return nil
 			}
+			context := markers[name]
+			if !marker {
+				root = path.Join(path.Dir(path.Dir(name)), "pkgs")
+			}
+			context.root, context.packagePath = root, packagePath
+			if context.refs == nil {
+				context.refs = map[file.ID]bool{}
+			}
+			context.refs[node.Reference.ID()] = true
+			markers[name] = context
 			return nil
 		})
 		if err != nil {
@@ -128,14 +141,8 @@ func (c *imageCollector) collectLayers() error {
 			if err := c.ctx.Err(); err != nil {
 				return err
 			}
-			root := path.Dir(files[entry].path)
-			for !activeRoots[root] && root != "/" {
-				if err := c.ctx.Err(); err != nil {
-					return err
-				}
-				root = path.Dir(root)
-			}
-			if !activeRoots[root] {
+			root := cacheAncestor(path.Dir(files[entry].path), activeRoots)
+			if root == "" {
 				continue
 			}
 			files[entry].cacheRoot = root
@@ -157,14 +164,7 @@ func (c *imageCollector) collectLayers() error {
 			if c.ctx.Err() != nil {
 				return c.ctx.Err()
 			}
-			root := string(p)
-			for !historicalRoots[root] && root != "/" {
-				if c.ctx.Err() != nil {
-					return c.ctx.Err()
-				}
-				root = path.Dir(root)
-			}
-			if node.IsLink() && !historicalRoots[root] && c.cacheRelevantPath(string(p), historicalRoots) {
+			if node.IsLink() && cacheAncestor(string(p), historicalRoots) == "" && c.cacheRelevantPath(string(p), historicalRoots) {
 				c.issue(capability, string(p), err.Error())
 				finalComplete = false
 			}
@@ -184,14 +184,7 @@ func (c *imageCollector) collectLayers() error {
 				return nil
 			}
 			finalRefs[content.ID()] = true
-			root := string(p)
-			for !historicalRoots[root] && root != "/" {
-				if err := c.ctx.Err(); err != nil {
-					return err
-				}
-				root = path.Dir(root)
-			}
-			if !historicalRoots[root] {
+			if cacheAncestor(string(p), historicalRoots) == "" {
 				runtimeRefs[content.ID()] = true
 			}
 		}
@@ -219,13 +212,9 @@ func (c *imageCollector) collectLayers() error {
 		if err := c.ctx.Err(); err != nil {
 			return err
 		}
-		key := groupKey{entry.layer, entry.packagePath}
-		if entry.packagePath == "" {
+		archive := archivePath(entry.path) && entry.cacheRoot != "" && entry.cacheRoot == path.Dir(entry.path)
+		if entry.packagePath == "" && !archive {
 			continue
-		}
-		group := groups[key]
-		if !finalComplete {
-			group.runtime = true
 		}
 		content, err := c.contentReference(entry.ref)
 		if err != nil {
@@ -235,73 +224,47 @@ func (c *imageCollector) collectLayers() error {
 			c.issue(capability, entry.path, err.Error())
 			continue
 		}
-		if runtimeRefs[content.ID()] {
-			group.runtime = true
-		}
-		if !finalRefs[content.ID()] {
-			found, resolution, err := c.tree.File(file.Path(entry.path))
-			if c.ctx.Err() != nil {
-				return c.ctx.Err()
-			}
-			if err == nil && found && resolution != nil && resolution.HasReference() && resolution.ID() != entry.ref.ID() {
-				group.overwritten = true
-			}
-			metadata, err := c.loaded.Image.FileCatalog.Get(entry.ref)
-			if err == nil && metadata.FileInfo != nil && metadata.Size() >= 0 {
-				group.bytes += metadata.Size()
-				if group.reference.ID() == 0 || entry.path < string(group.reference.RealPath) {
-					group.reference = entry.ref
-				}
-			} else {
-				c.issue(capability, entry.path, "historical cache metadata is unavailable")
-			}
-		}
-		groups[key] = group
-	}
-	for _, entry := range files {
-		if err := c.ctx.Err(); err != nil {
-			return err
-		}
-		content, err := c.contentReference(entry.ref)
-		if err != nil {
-			if c.ctx.Err() != nil {
-				return c.ctx.Err()
-			}
-			continue
-		}
+		key := groupKey{entry.layer, entry.packagePath}
+		group := groups[key]
+		group.runtime = group.runtime || !finalComplete || runtimeRefs[content.ID()]
 		if finalRefs[content.ID()] {
-			continue
-		}
-		kind, artifactPath := "", entry.path
-		var size int64
-		if archivePath(entry.path) && entry.cacheRoot != "" && entry.cacheRoot == path.Dir(entry.path) {
-			kind = "archive"
-			metadata, err := c.loaded.Image.FileCatalog.Get(entry.ref)
-			if err == nil && metadata.FileInfo != nil && metadata.Size() >= 0 {
-				size = metadata.Size()
-			} else {
-				c.issue(capability, entry.path, "historical archive metadata is unavailable")
+			if entry.packagePath != "" {
+				groups[key] = group
 			}
-		}
-		if kind == "" {
 			continue
+		}
+		metadata, metadataErr := c.loaded.Image.FileCatalog.Get(entry.ref)
+		var size int64
+		if metadataErr == nil && metadata.FileInfo != nil && metadata.Size() >= 0 {
+			size = metadata.Size()
+		} else {
+			c.issue(capability, entry.path, "historical cache metadata is unavailable")
 		}
 		found, resolution, err := c.tree.File(file.Path(entry.path))
 		if c.ctx.Err() != nil {
 			return c.ctx.Err()
 		}
-		if err != nil {
+		if err != nil && archive {
 			c.issue(capability, entry.path, "final cache path cannot be inspected")
 			continue
 		}
-		overwritten := found && resolution != nil && resolution.HasReference() && resolution.ID() != entry.ref.ID()
-		if overwritten {
-			kind += "-overwritten"
-		} else {
-			kind += "-hidden"
+		overwritten := err == nil && found && resolution != nil && resolution.HasReference() && resolution.ID() != entry.ref.ID()
+		if entry.packagePath != "" {
+			group.overwritten = group.overwritten || overwritten
+			group.bytes += size
+			if group.reference.ID() == 0 || entry.path < string(group.reference.RealPath) {
+				group.reference = entry.ref
+			}
+			groups[key] = group
 		}
-		blob := c.loaded.Manifest.Layers[entry.layer]
-		c.add(capability, &c.target.Retained, Artifact{Path: artifactPath, Kind: kind, Bytes: size, Layer: entry.layer, DiffID: c.loaded.Config.RootFS.DiffIDs[entry.layer].String(), BlobDigest: blob.Digest.String(), LayerBytes: blob.Size, Reference: c.reference(entry.ref)})
+		if archive {
+			kind := "archive-hidden"
+			if overwritten {
+				kind = "archive-overwritten"
+			}
+			blob := manifest.Layers[entry.layer]
+			c.add(capability, &c.target.Retained, Artifact{Path: entry.path, Kind: kind, Bytes: size, Layer: entry.layer, DiffID: diffIDs[entry.layer].String(), BlobDigest: blob.Digest.String(), LayerBytes: blob.Size, Reference: c.reference(entry.ref)})
+		}
 	}
 	keys := make([]groupKey, 0, len(groups))
 	for key := range groups {
@@ -310,11 +273,8 @@ func (c *imageCollector) collectLayers() error {
 		}
 		keys = append(keys, key)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].path == keys[j].path {
-			return keys[i].layer < keys[j].layer
-		}
-		return keys[i].path < keys[j].path
+	slices.SortFunc(keys, func(a, b groupKey) int {
+		return cmp.Or(cmp.Compare(a.path, b.path), cmp.Compare(a.layer, b.layer))
 	})
 	for _, key := range keys {
 		if err := c.ctx.Err(); err != nil {
@@ -328,8 +288,8 @@ func (c *imageCollector) collectLayers() error {
 		if group.overwritten {
 			kind = "extracted-overwritten"
 		}
-		blob := c.loaded.Manifest.Layers[key.layer]
-		c.add(capability, &c.target.Retained, Artifact{Path: key.path, Kind: kind, Bytes: group.bytes, Layer: key.layer, DiffID: c.loaded.Config.RootFS.DiffIDs[key.layer].String(), BlobDigest: blob.Digest.String(), LayerBytes: blob.Size, Reference: c.reference(group.reference)})
+		blob := manifest.Layers[key.layer]
+		c.add(capability, &c.target.Retained, Artifact{Path: key.path, Kind: kind, Bytes: group.bytes, Layer: key.layer, DiffID: diffIDs[key.layer].String(), BlobDigest: blob.Digest.String(), LayerBytes: blob.Size, Reference: c.reference(group.reference)})
 	}
 	return c.ctx.Err()
 }
