@@ -50,14 +50,18 @@ func renderImageText(cmd *cobra.Command, opts *commandOptions, report inventory.
 	return out.Err()
 }
 
+// renderImageSBOM reports the whole-image SBOM. A written SBOM is always shown with
+// its path and counts, even when a later step made the inspection incomplete; the
+// error text is shown separately so a kept file is never reported as missing.
 func renderImageSBOM(out *printer, report inventory.ImageReport) {
+	if result := report.Result; result != nil {
+		out.Printf("SBOM: %s\nSyft: %s; %d unique packages observed (%d conda, %d installed Python metadata, %d other); %d unknown file coordinates\n", lintText(result.Path), syftVersion(result.SyftVersion), result.Total, result.Conda, result.PythonInstalled, result.Other, result.Unknowns)
+		if report.ScanError != "" {
+			out.Printf("SBOM warning: %s\n", lintText(report.ScanError))
+		}
+		return
+	}
 	if report.ScanError != "" {
 		out.Printf("SBOM: not written (%s)\n", lintText(report.ScanError))
-		return
 	}
-	if report.Result == nil {
-		return
-	}
-	result := report.Result
-	out.Printf("SBOM: %s\nSyft: %s; %d unique packages observed (%d conda, %d installed Python metadata, %d other); %d unknown file coordinates\n", lintText(result.Path), syftVersion(result.SyftVersion), result.Total, result.Conda, result.PythonInstalled, result.Other, result.Unknowns)
 }

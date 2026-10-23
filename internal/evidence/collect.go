@@ -23,7 +23,7 @@ func Collect(ctx context.Context, source string, inputs []string, platform strin
 	var err error
 	switch source {
 	case "dir":
-		snapshot, err = CollectHost(ctx, inputs, req, nil)
+		snapshot, err = CollectHost(ctx, inputs, req)
 	case "oci-archive":
 		if len(inputs) != 1 {
 			err = fmt.Errorf("oci-archive source requires exactly one archive input, got %d", len(inputs))

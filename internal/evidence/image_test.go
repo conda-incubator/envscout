@@ -9,8 +9,11 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/anaconda/envscout/internal/discovery"
 	"github.com/anaconda/envscout/internal/imageinput"
 	"github.com/anaconda/envscout/internal/testimage"
 	"github.com/anchore/stereoscope/pkg/file"
@@ -184,24 +187,24 @@ func TestImageCacheLinks(t *testing.T) {
 
 func TestImageRuntimeConfiguration(t *testing.T) {
 	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), packageMarker("opt/conda/envs/app/conda-meta/python.json", "python"), commandEntry("opt/conda/bin/conda"), commandEntry("opt/conda/envs/app/bin/python")})
-	loaded.Config.Config.Entrypoint = []string{"/opt/conda/envs/app/bin/python"}
+	loaded.Image.Metadata.Config.Config.Entrypoint = []string{"/opt/conda/envs/app/bin/python"}
 	target := collectFixture(t, loaded, "runtime-config")
 	if target.RuntimePrefix != "/opt/conda/envs/app" || target.RuntimeUsesTooling || len(target.Prefixes) != 0 {
 		t.Fatalf("runtime = %+v", target)
 	}
-	loaded.Config.Config.Entrypoint = []string{"conda", "run"}
-	loaded.Config.Config.Env = []string{"PATH=/opt/conda/bin"}
+	loaded.Image.Metadata.Config.Config.Entrypoint = []string{"conda", "run"}
+	loaded.Image.Metadata.Config.Config.Env = []string{"PATH=/opt/conda/bin"}
 	target = collectFixture(t, loaded, "runtime-config")
 	if !target.RuntimeUsesTooling {
 		t.Fatalf("tool invocation = %+v", target)
 	}
-	loaded.Config.Config.Entrypoint = []string{"/wrapper"}
-	loaded.Config.Config.Cmd = []string{"/opt/conda/envs/app/bin/python"}
+	loaded.Image.Metadata.Config.Config.Entrypoint = []string{"/wrapper"}
+	loaded.Image.Metadata.Config.Config.Cmd = []string{"/opt/conda/envs/app/bin/python"}
 	target = collectFixture(t, loaded, "runtime-config")
 	if target.RuntimePrefix != "" || target.RuntimeUsesTooling {
 		t.Fatalf("Cmd arguments used as executable hint = %+v", target)
 	}
-	loaded.Config.Config.Entrypoint = nil
+	loaded.Image.Metadata.Config.Config.Entrypoint = nil
 	target = collectFixture(t, loaded, "runtime-config")
 	if target.RuntimePrefix != "/opt/conda/envs/app" {
 		t.Fatalf("Cmd executable hint=%+v", target)
@@ -214,7 +217,7 @@ func TestImageRuntimeConfiguration(t *testing.T) {
 	if err != nil || target.RuntimePrefix != "/opt/conda/envs/app" {
 		t.Fatalf("assertion = %+v %v", target, err)
 	}
-	loaded.Config = nil
+	loaded.Image.Metadata.RawConfig = nil
 	target = collectFixture(t, loaded, "runtime-config", "os-package-tools")
 	if target.Coverage["runtime-config"] != Partial || target.Coverage["os-package-tools"] != Complete {
 		t.Fatalf("independent coverage = %+v", target)
@@ -313,9 +316,9 @@ func TestImageLayerCacheContextsAreAsOfLayer(t *testing.T) {
 
 func TestImageRuntimeCommandSemanticsAndPrivacy(t *testing.T) {
 	loaded := loadEvidenceImage(t, []testimage.Entry{commandEntry("usr/bin/python"), {Name: "loop", Type: tar.TypeSymlink, Link: "loop"}})
-	loaded.Config.Config.Entrypoint = []string{"/usr/bin/python"}
-	loaded.Config.Config.Cmd = []string{"PRIVATE_TOKEN"}
-	loaded.Config.Config.Env = []string{"PATH=/loop"}
+	loaded.Image.Metadata.Config.Config.Entrypoint = []string{"/usr/bin/python"}
+	loaded.Image.Metadata.Config.Config.Cmd = []string{"PRIVATE_TOKEN"}
+	loaded.Image.Metadata.Config.Config.Env = []string{"PATH=/loop"}
 	target := collectFixture(t, loaded, "runtime-config")
 	data, err := json.Marshal(target)
 	if err != nil {
@@ -325,7 +328,7 @@ func TestImageRuntimeCommandSemanticsAndPrivacy(t *testing.T) {
 		t.Fatalf("argument privacy=%s", data)
 	}
 	for _, command := range []string{"PRIVATE_COMMAND", "/loop/PRIVATE_PATH"} {
-		loaded.Config.Config.Entrypoint = []string{command}
+		loaded.Image.Metadata.Config.Config.Entrypoint = []string{command}
 		target = collectFixture(t, loaded, "runtime-config")
 		data, err = json.Marshal(target)
 		if err != nil {
@@ -344,8 +347,8 @@ func TestImageRuntimeCommandSemanticsAndPrivacy(t *testing.T) {
 
 func TestImageRuntimePrefixFromValidatedPATH(t *testing.T) {
 	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("tools/conda-meta/conda.json", "conda"), packageMarker("app/conda-meta/python.json", "python"), commandEntry("app/bin/python")})
-	loaded.Config.Config.Entrypoint = []string{"python"}
-	loaded.Config.Config.Env = []string{"PATH=/app/bin"}
+	loaded.Image.Metadata.Config.Config.Entrypoint = []string{"python"}
+	loaded.Image.Metadata.Config.Config.Env = []string{"PATH=/app/bin"}
 	target := collectFixture(t, loaded, "prefixes", "tooling-prefix", "runtime-config")
 	if target.RuntimePrefix != "/app" || target.RuntimeUsesTooling || target.Coverage["runtime-config"] != Complete {
 		t.Fatalf("PATH runtime hint=%+v", target)
@@ -415,7 +418,7 @@ func TestImageCancellationDuringReadClosesReader(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	guard := &cancelEvidenceCatalog{FileCatalogReader: loaded.Image.FileCatalog, cancel: cancel}
 	loaded.Image.FileCatalog = guard
-	_, err := CollectImage(ctx, loaded, Request{Capabilities: []string{"prefixes"}})
+	_, err := CollectImage(ctx, loaded, Request{Capabilities: []string{"tooling-prefix"}})
 	if !errors.Is(err, context.Canceled) || !guard.closed {
 		t.Fatalf("cancel err=%v reader closed=%v", err, guard.closed)
 	}
@@ -490,7 +493,7 @@ func TestImageLayerOverwriteAndWhiteout(t *testing.T) {
 			if removed {
 				wantKind = "archive-hidden"
 			}
-			if artifact.Kind != wantKind || artifact.Layer != 0 || artifact.DiffID != loaded.Config.RootFS.DiffIDs[0].String() || artifact.BlobDigest != loaded.Manifest.Layers[0].Digest.String() || artifact.LayerBytes != loaded.Manifest.Layers[0].Size || artifact.Bytes != int64(len("old archive")) {
+			if artifact.Kind != wantKind || artifact.Layer != 0 || artifact.DiffID != loaded.Image.Metadata.Config.RootFS.DiffIDs[0].String() || artifact.BlobDigest != manifestOf(t, loaded).Layers[0].Digest.String() || artifact.LayerBytes != manifestOf(t, loaded).Layers[0].Size || artifact.Bytes != int64(len("old archive")) {
 				t.Fatalf("layer identity = %+v", artifact)
 			}
 			if target.Coverage["final-cache"] != NotCollected {
@@ -599,7 +602,7 @@ func TestImageLayerPackagePayloadAddedAfterMarker(t *testing.T) {
 				t.Fatalf("later payload omitted: %+v", target)
 			}
 			artifact := target.Retained[0]
-			if artifact.Layer != 1 || artifact.Kind != "extracted-"+mode || artifact.Bytes != int64(len("later payload")) || artifact.DiffID != loaded.Config.RootFS.DiffIDs[1].String() || artifact.BlobDigest != loaded.Manifest.Layers[1].Digest.String() || artifact.LayerBytes != loaded.Manifest.Layers[1].Size || !strings.HasSuffix(artifact.Reference, ":/cache/pkg/file") {
+			if artifact.Layer != 1 || artifact.Kind != "extracted-"+mode || artifact.Bytes != int64(len("later payload")) || artifact.DiffID != loaded.Image.Metadata.Config.RootFS.DiffIDs[1].String() || artifact.BlobDigest != manifestOf(t, loaded).Layers[1].Digest.String() || artifact.LayerBytes != manifestOf(t, loaded).Layers[1].Size || !strings.HasSuffix(artifact.Reference, ":/cache/pkg/file") {
 				t.Fatalf("payload source attribution=%+v", artifact)
 			}
 		})
@@ -653,10 +656,123 @@ func TestImageTraversalCapsAndCancellation(t *testing.T) {
 	if _, err := CollectImage(context.Background(), nil, Request{}); err == nil {
 		t.Fatal("nil image accepted")
 	}
-	loaded.Manifest = nil
-	loaded.Config = &v1.ConfigFile{}
+	loaded.Image.Metadata.RawManifest = nil
 	target := collectFixture(t, loaded, "layer-retention")
 	if target.Coverage["layer-retention"] != Partial {
 		t.Fatalf("missing descriptors=%+v", target)
 	}
+}
+
+func manifestOf(t *testing.T, loaded *imageinput.Loaded) v1.Manifest {
+	t.Helper()
+	var manifest v1.Manifest
+	if err := json.Unmarshal(loaded.Image.Metadata.RawManifest, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
+
+type openCountCatalog struct {
+	image.FileCatalogReader
+	mu    sync.Mutex
+	opens map[string]int
+}
+
+func (catalog *openCountCatalog) Open(ref file.Reference) (io.ReadCloser, error) {
+	catalog.mu.Lock()
+	catalog.opens[string(ref.RealPath)]++
+	catalog.mu.Unlock()
+	return catalog.FileCatalogReader.Open(ref)
+}
+
+func TestImageFinalRecordsParsedOnce(t *testing.T) {
+	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), packageMarker("opt/conda/envs/app/conda-meta/python.json", "python"), {Name: "opt/conda/pkgs/pkg.conda", Data: "archive"}})
+	counter := &openCountCatalog{FileCatalogReader: loaded.Image.FileCatalog, opens: map[string]int{}}
+	loaded.Image.FileCatalog = counter
+	// Final records are parsed exactly once by the conda cataloger. Layer retention reads
+	// historical layer markers separately, so it is excluded from this final-view count.
+	target := collectFixture(t, loaded, "prefixes", "tooling-prefix", "final-cache", "runtime-config")
+	if len(target.Prefixes) != 2 || target.Coverage["prefixes"] != Complete {
+		t.Fatalf("prefixes = %+v", target)
+	}
+	for _, record := range []string{"/opt/conda/conda-meta/conda.json", "/opt/conda/envs/app/conda-meta/python.json"} {
+		if counter.opens[record] != 1 {
+			t.Fatalf("%s opened %d times; final records must be parsed once", record, counter.opens[record])
+		}
+	}
+}
+
+func TestImageMalformedOnlyCandidateIsNotAPrefix(t *testing.T) {
+	loaded := loadEvidenceImage(t, []testimage.Entry{{Name: "app/conda-meta/python.json", Data: `{"name":"","version":""}`}})
+	target := collectFixture(t, loaded, "prefixes", "tooling-prefix", "runtime-config")
+	if len(target.Prefixes) != 0 {
+		t.Fatalf("invalid-only candidate became a prefix: %+v", target.Prefixes)
+	}
+	if target.Coverage["prefixes"] != Partial || target.Coverage["tooling-prefix"] != Partial {
+		t.Fatalf("coverage = %+v issues=%+v", target.Coverage, target.Issues)
+	}
+}
+
+func TestImageMalformedPlusValidRecordsKeepPositivePrefix(t *testing.T) {
+	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("app/conda-meta/python.json", "python"), {Name: "app/conda-meta/broken.json", Data: `{"name":""}`}})
+	target := collectFixture(t, loaded, "prefixes")
+	if len(target.Prefixes) != 1 || target.Prefixes[0].Path != "/app" {
+		t.Fatalf("positive prefix lost: %+v", target.Prefixes)
+	}
+}
+
+func TestImageExtractedPackageDirRootMustExistInImage(t *testing.T) {
+	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/pkg.conda", Data: "archive"}})
+	target := collectFixture(t, loaded, "final-cache")
+	if len(target.Issues) != 0 {
+		t.Fatalf("absent build-host cache produced issues: %+v", target.Issues)
+	}
+}
+
+func TestImageCancellationKeepsPartialPositives(t *testing.T) {
+	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("app/conda-meta/python.json", "python"), packageMarker("tools/conda-meta/conda.json", "conda")})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	guard := &cancelAfterOpen{FileCatalogReader: loaded.Image.FileCatalog, cancel: cancel}
+	loaded.Image.FileCatalog = guard
+	target, err := CollectImage(ctx, loaded, Request{Capabilities: []string{"prefixes", "tooling-prefix"}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	for _, capability := range []string{"prefixes", "tooling-prefix"} {
+		if target.Coverage[capability] != Partial {
+			t.Fatalf("%s = %s after cancel; must not report complete", capability, target.Coverage[capability])
+		}
+	}
+}
+
+func TestImageConfirmedPrefixSurvivesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	revision := 3
+	collector := imageCollector{
+		ctx:     ctx,
+		target:  Target{Prefixes: []Prefix{}, Issues: []Issue{}, Coverage: map[string]string{"prefixes": Complete, "history": Complete}},
+		records: map[string]*prefixRecords{"/app": {}},
+	}
+	collector.confirmPrefixes(Request{Capabilities: []string{"prefixes", "history"}}, []discovery.Environment{{Path: "/app", Revision: &revision}})
+	if !errors.Is(collector.cancelled(ctx), context.Canceled) || len(collector.target.Prefixes) != 1 {
+		t.Fatalf("validated partial positive was discarded: %+v", collector.target)
+	}
+	if collector.target.Coverage["prefixes"] != Partial || collector.target.Coverage["history"] != Partial {
+		t.Fatalf("cancelled coverage must stay partial: %+v", collector.target.Coverage)
+	}
+}
+
+type cancelAfterOpen struct {
+	image.FileCatalogReader
+	cancel context.CancelFunc
+	opened atomic.Bool
+}
+
+func (catalog *cancelAfterOpen) Open(ref file.Reference) (io.ReadCloser, error) {
+	if catalog.opened.CompareAndSwap(false, true) {
+		catalog.cancel()
+	}
+	return catalog.FileCatalogReader.Open(ref)
 }

@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,5 +74,46 @@ func TestWriteConda(t *testing.T) {
 	again, err := os.ReadFile(result.Path)
 	if err != nil || string(again) != string(data) {
 		t.Fatal("existing SBOM was changed")
+	}
+}
+
+func TestWriteCondaRefusesExistingSymlink(t *testing.T) {
+	root := t.TempDir()
+	prefix := filepath.Join(root, "envs", "sample")
+	if err := os.MkdirAll(prefix, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := discovery.Environment{Name: "sample", Path: prefix}
+	output := t.TempDir()
+	destination := filepath.Join(output, Filename(env))
+	if err := os.Symlink(filepath.Join(root, "missing-target"), destination); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteConda(context.Background(), env, output); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("expected dangling symlink refusal, got %v", err)
+	}
+	if target, err := os.Readlink(destination); err != nil || target != filepath.Join(root, "missing-target") {
+		t.Fatalf("symlink changed: %q, %v", target, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "missing-target")); !os.IsNotExist(err) {
+		t.Fatalf("writer followed symlink to create its target: %v", err)
+	}
+}
+
+func TestWriteCondaCanceledLeavesNoOutput(t *testing.T) {
+	prefix := filepath.Join(t.TempDir(), "sample")
+	if err := os.MkdirAll(prefix, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := discovery.Environment{Name: "sample", Path: prefix}
+	output := filepath.Join(t.TempDir(), "reports")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := WriteConda(ctx, env, output); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation, got %v", err)
+	}
+	entries, err := os.ReadDir(output)
+	if err == nil && len(entries) != 0 {
+		t.Fatalf("canceled write left output: %v", entries)
 	}
 }

@@ -2,7 +2,9 @@ package evidence
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -12,6 +14,10 @@ import (
 	"time"
 
 	"github.com/anaconda/envscout/internal/discovery"
+	"github.com/anaconda/envscout/internal/inventory"
+	"github.com/anchore/syft/syft/pkg"
+	"github.com/anchore/syft/syft/source"
+	"github.com/anchore/syft/syft/source/directorysource"
 )
 
 func FileID(filename string) string {
@@ -22,8 +28,11 @@ func FileID(filename string) string {
 	return (&url.URL{Scheme: "file", Path: filename}).String()
 }
 
-// CollectHost requires explicit roots and never runs an inventory or tool process.
-func CollectHost(ctx context.Context, roots []string, req Request, progress *discovery.Progress) (Snapshot, error) {
+// CollectHost requires explicit roots and never invokes an external tool.
+// Without requested collectors it only lists the root targets. With collectors,
+// discovery returns candidate prefixes, which are validated through the conda-only
+// inventory pathway before any of them counts as positive evidence.
+func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, error) {
 	snapshot := Snapshot{Started: time.Now().UTC(), Targets: []Target{}, Issues: []Issue{}}
 	if len(roots) == 0 {
 		return snapshot, fmt.Errorf("lint requires explicit directory roots")
@@ -56,7 +65,7 @@ func CollectHost(ctx context.Context, roots []string, req Request, progress *dis
 		return snapshot, nil
 	}
 	readHistory := Requested(req, "history")
-	report, discoveryErr := discovery.FindCondaFacts(ctx, roots, progress, readHistory)
+	report, discoveryErr := discovery.Find(ctx, roots, readHistory)
 	for _, issue := range report.Issues {
 		capability := "prefixes"
 		if filepath.Base(issue.Path) == "history" {
@@ -64,47 +73,123 @@ func CollectHost(ctx context.Context, roots []string, req Request, progress *dis
 		}
 		snapshot.Issues = append(snapshot.Issues, Issue{Capability: capability, Path: issue.Path, Message: issue.Error})
 	}
-	if req.Project != "" && len(report.Environments) != 1 && discoveryErr == nil {
-		return snapshot, fmt.Errorf("--project requires exactly one discovered prefix for an explicit association")
-	}
-	coverage, historyCoverage := Complete, NotCollected
-	if discoveryErr != nil {
-		coverage = Partial
-	}
+	readHistoryCoverage := NotCollected
 	if readHistory {
-		historyCoverage = Complete
+		readHistoryCoverage = Complete
+	}
+	// Discovery candidates are not proof of conda metadata. Each prefix is validated
+	// through inventory.CondaRecords. Validated targets accumulate in snapshot so every
+	// return path keeps them: a cancellation or later error never drops earlier evidence.
+	var validated []Target
+	var cancelErr error
+	for _, env := range report.Environments {
+		if err := ctx.Err(); err != nil {
+			cancelErr = err
+			break
+		}
+		records, err := condaRecordsForPrefix(ctx, env.Path)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			cancelErr = ctxErr
+		}
+		if err != nil {
+			snapshot.Issues = append(snapshot.Issues, Issue{Capability: "prefixes", Path: env.Path, Message: err.Error()})
+		}
+		if len(records) == 0 {
+			if err == nil {
+				snapshot.Issues = append(snapshot.Issues, Issue{Capability: "prefixes", Path: env.Path, Message: "no valid conda package metadata; prefix not counted"})
+			}
+		} else {
+			validated = append(validated, Target{ID: FileID(env.Path), Kind: "dir", Input: env.Path, Roots: report.Roots,
+				Prefixes: []Prefix{{Path: env.Path, Revision: env.Revision}}, Coverage: map[string]string{}, Issues: []Issue{}})
+		}
+		if cancelErr != nil {
+			break
+		}
+	}
+	snapshot.Targets = validated
+	if cancelErr != nil {
+		discoveryErr = errors.Join(discoveryErr, cancelErr)
+	}
+	// Final coverage is computed once, after every issue is known.
+	coverage := Complete
+	if discoveryErr != nil || cancelErr != nil {
+		coverage = Partial
 	}
 	for _, issue := range snapshot.Issues {
 		if issue.Capability == "prefixes" {
 			coverage = Partial
-		} else {
+		}
+	}
+	historyCoverage := readHistoryCoverage
+	for _, issue := range snapshot.Issues {
+		if issue.Capability == "history" {
 			historyCoverage = Partial
 		}
 	}
-	for _, env := range report.Environments {
-		target := Target{ID: FileID(env.Path), Kind: "dir", Input: env.Path, Roots: report.Roots,
-			Prefixes: []Prefix{{Path: env.Path, Revision: env.Revision}}, Coverage: map[string]string{"prefixes": coverage, "history": historyCoverage}, Issues: []Issue{}}
+	for i := range snapshot.Targets {
+		target := &snapshot.Targets[i]
+		target.Coverage["prefixes"] = coverage
+		target.Coverage["history"] = historyCoverage
+		if readHistory && (discoveryErr != nil || cancelErr != nil) {
+			target.Coverage["history"] = Partial
+		}
 		if Requested(req, "project-association") {
 			target.Coverage["project-association"] = Complete
-			if req.Project != "" && discoveryErr == nil {
-				project, issue, err := collectProject(req.Project)
-				if err != nil {
-					return snapshot, err
-				}
-				target.Project = project
-				if issue != nil {
-					target.Issues = append(target.Issues, *issue)
-					target.Coverage["project-association"] = Partial
-				}
+		}
+	}
+	// Project association uses the final validated list and runs once, only when the
+	// collection finished without cancellation.
+	if req.Project != "" && discoveryErr == nil && cancelErr == nil {
+		if len(snapshot.Targets) != 1 {
+			return snapshot, errors.Join(discoveryErr, fmt.Errorf("--project requires exactly one validated prefix for an explicit association"))
+		}
+		if Requested(req, "project-association") {
+			project, issue, err := collectProject(req.Project)
+			if err != nil {
+				return snapshot, err
+			}
+			target := &snapshot.Targets[0]
+			target.Project = project
+			if issue != nil {
+				target.Issues = append(target.Issues, *issue)
+				target.Coverage["project-association"] = Partial
 			}
 		}
-		snapshot.Targets = append(snapshot.Targets, target)
 	}
 	if len(snapshot.Targets) == 0 && len(report.Roots) > 0 {
 		snapshot.Targets = append(snapshot.Targets, Target{ID: FileID(report.Roots[0]), Kind: "dir", Input: report.Roots[0], Roots: report.Roots,
 			Prefixes: []Prefix{}, Coverage: map[string]string{"prefixes": coverage}, Issues: []Issue{}})
 	}
-	return snapshot, discoveryErr
+	return snapshot, errors.Join(discoveryErr, cancelErr)
+}
+
+// condaRecordsForPrefix returns the valid conda records of one candidate prefix via
+// the conda-only inventory pathway. The source is rooted at the prefix's conda-meta
+// directory with the prefix as its virtual base, so Syft indexes only that directory
+// and its records keep prefix-relative paths matching the cataloger's
+// **/conda-meta/*.json glob. Nested environments and unrelated subtrees are never
+// visited. Records parsed before an error are returned with it. The source is owned
+// here and always closed.
+func condaRecordsForPrefix(ctx context.Context, prefix string) ([]pkg.Package, error) {
+	metadata := filepath.Join(prefix, "conda-meta")
+	entries, err := os.ReadDir(metadata)
+	if err != nil {
+		return nil, err
+	}
+	var exclude []string
+	for _, entry := range entries {
+		if entry.Type()&fs.ModeSymlink != 0 {
+			// Quote glob metacharacters: exclusions are patterns, filenames are not.
+			name := strings.NewReplacer("[", "\\[", "]", "\\]", "*", "\\*", "?", "\\?").Replace(entry.Name())
+			exclude = append(exclude, "./"+name)
+		}
+	}
+	src, err := directorysource.New(directorysource.Config{Path: metadata, Base: prefix, Exclude: source.ExcludeConfig{Paths: exclude}})
+	if err != nil {
+		return nil, fmt.Errorf("open conda-meta for %s: %w", prefix, err)
+	}
+	records, err := inventory.CondaRecords(ctx, src, source.SquashedScope)
+	return records, errors.Join(err, src.Close())
 }
 
 // The association is supplied by the caller. Presence of a lock is not proof of
@@ -114,24 +199,16 @@ func collectProject(input string) (*Project, *Issue, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	info, err := os.Lstat(abs)
-	if err != nil || !info.IsDir() {
+	if info, err := os.Lstat(abs); err != nil || !info.IsDir() {
 		return nil, nil, fmt.Errorf("--project must name a real directory")
 	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil || resolved != abs {
-		return nil, nil, fmt.Errorf("--project must not contain symlinked path components")
-	}
+	// os.OpenRoot confines every lock lookup to the project directory, so a lock
+	// name that is a symlink or points outside it can never be read.
 	root, err := os.OpenRoot(abs)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer func() { _ = root.Close() }()
-	opened, err := root.Stat(".")
-	current, checkErr := os.Lstat(abs)
-	if err != nil || checkErr != nil || !current.IsDir() || !os.SameFile(info, opened) || !os.SameFile(opened, current) {
-		return nil, nil, fmt.Errorf("project directory changed while opening")
-	}
 	p := &Project{Path: abs, Associated: true, Reason: "explicit user association; no resolved lock found"}
 	for _, name := range []string{"pixi.lock", "conda-lock.yaml", "conda-lock.yml", "uv.lock", "poetry.lock", "Pipfile.lock"} {
 		info, err := root.Lstat(name)

@@ -93,13 +93,14 @@ func findCommand(opts *commandOptions) *cobra.Command {
 				}
 				return errors.Join(renderImage(cmd, opts, report, false), err)
 			}
-			ctx := cmd.Context()
+			ctx, stopProgress := startDiscoveryProgress(cmd.Context(), cmd.ErrOrStderr(), opts.format == "text")
 			report, err := findLocal(ctx, roots)
+			err = errors.Join(err, stopProgress())
 			// Cancellation keeps any partial evidence: environments found before the
 			// walk stopped are still rendered. A walk with nothing recorded, or any
 			// other failure, returns the error alone.
 			partial := len(report.Environments) > 0 || len(report.Issues) > 0
-			if err != nil && (ctx.Err() == nil || !partial) {
+			if err != nil && (cmd.Context().Err() == nil || !partial) {
 				return err
 			}
 			return errors.Join(renderFind(cmd, opts, report), err)
@@ -108,20 +109,13 @@ func findCommand(opts *commandOptions) *cobra.Command {
 }
 
 // findLocal discovers explicit roots, or known locations when none are given.
-// Known-location collection is not context-aware, so cancellation is checked
-// before and after it. A returned report with a non-empty mode is partial.
+// Both discovery entry points are context-aware and return partial reports with
+// the cancellation error.
 func findLocal(ctx context.Context, roots []string) (discovery.Report, error) {
 	if len(roots) > 0 {
-		return discovery.FindCondaFacts(ctx, roots, nil, true)
+		return discovery.Find(ctx, roots, true)
 	}
-	if err := ctx.Err(); err != nil {
-		return discovery.Report{}, err
-	}
-	report, err := discovery.FindKnownCondaWithProgress(nil)
-	if err != nil {
-		return report, err
-	}
-	return report, ctx.Err()
+	return discovery.FindKnown(ctx)
 }
 
 // renderFind writes the discovery report. Partial discovery is rendered before

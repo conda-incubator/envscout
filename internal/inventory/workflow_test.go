@@ -122,18 +122,26 @@ func TestScanCondaPartialDiscoveryStillScans(t *testing.T) {
 	}
 	outputDir := t.TempDir()
 	report, err := ScanConda(context.Background(), []string{root}, outputDir)
-	if err == nil || !strings.Contains(err.Error(), "scan incomplete: 0 failed target(s), 1 discovery issue(s)") {
+	// Discovery only proves candidates; the malformed prefix fails conda validation
+	// during scanning and is counted as a failed target, while the good prefix stays.
+	if err == nil || !strings.Contains(err.Error(), "scan incomplete: 1 failed target(s)") {
 		t.Fatalf("partial discovery must return incomplete error: %v", err)
 	}
-	if len(report.Discovery.Issues) == 0 {
-		t.Fatal("expected a discovery issue")
+	if report.Status != StatusIncomplete || len(report.Observations) != 2 {
+		t.Fatalf("scan should be incomplete with both candidates observed: %+v", report)
 	}
-	if report.Status != StatusIncomplete || len(report.Observations) != 1 || report.Observations[0].Error != "" {
-		t.Fatalf("scan should be incomplete but still write the good prefix: %+v", report)
+	good := 0
+	for _, observation := range report.Observations {
+		if observation.Error == "" {
+			good++
+		}
+	}
+	if good != 1 {
+		t.Fatalf("good prefix count = %d, want 1", good)
 	}
 	files, err := os.ReadDir(outputDir)
-	if err != nil || len(files) != 1 {
-		t.Fatalf("expected one SBOM: %v %v", files, err)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("expected the good and malformed SBOMs to be kept: %v %v", files, err)
 	}
 }
 
@@ -224,11 +232,17 @@ func TestInspectImagePartialDiscoveryStillWritesSBOM(t *testing.T) {
 	})
 	outputDir := t.TempDir()
 	report, err := InspectImage(context.Background(), archive, "linux/amd64", outputDir)
-	if err == nil || !strings.Contains(err.Error(), "inspection incomplete") {
+	// The malformed record is a candidate, not a discovery issue. Its conda content
+	// surfaces as an unknown file coordinate, which makes the inspection incomplete
+	// while the SBOM is still written and kept.
+	if err == nil || !strings.Contains(err.Error(), "image inspection incomplete") {
 		t.Fatalf("partial image scan should report incomplete: %v", err)
 	}
-	if report.Status != StatusIncomplete || report.Result == nil || len(report.Issues) == 0 {
-		t.Fatalf("partial report missing: %+v", report)
+	if report.Status != StatusIncomplete || report.Result == nil || report.Result.Unknowns == 0 {
+		t.Fatalf("partial report must carry the kept SBOM with unknown coordinates: %+v", report)
+	}
+	if _, statErr := os.Stat(report.Result.Path); statErr != nil {
+		t.Fatalf("kept SBOM missing: %v", statErr)
 	}
 	files, err := os.ReadDir(outputDir)
 	if err != nil || len(files) != 1 {
@@ -278,7 +292,11 @@ func TestScanCondaRelativeOutputResolved(t *testing.T) {
 	}
 }
 
-func TestScanCondaCancelledAfterLastTarget(t *testing.T) {
+// TestScanCondaCancellationDuringTargetRemovesPartialOutput cancels with a custom
+// cause while a target is being written. The in-flight observation must report an
+// error with a zero Result, no partial SBOM may remain, and the error must keep both
+// the cause and context.Canceled identity.
+func TestScanCondaCancellationDuringTargetRemovesPartialOutput(t *testing.T) {
 	root := t.TempDir()
 	writeCondaPrefix(t, filepath.Join(root, "envs", "a"))
 	cause := errors.New("operator stop")
@@ -288,13 +306,70 @@ func TestScanCondaCancelledAfterLastTarget(t *testing.T) {
 	if !errors.Is(err, cause) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v; want custom cause and context.Canceled", err)
 	}
-	if report.Status != StatusIncomplete || len(report.Observations) != 1 || report.Observations[0].Error != "" {
-		t.Fatalf("mid-flight cancel must keep the completed observation only: %+v", report)
+	if report.Status != StatusIncomplete {
+		t.Fatalf("status = %q, want incomplete", report.Status)
 	}
-	files, err := os.ReadDir(outputDir)
-	if err != nil || len(files) != 1 {
-		t.Fatalf("expected one preserved SBOM: %v %v", files, err)
+	for _, observation := range report.Observations {
+		if observation.Error != "" && observation.Result.Path != "" {
+			t.Fatalf("failed observation kept a result: %+v", observation)
+		}
 	}
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(outputDir, entry.Name()))
+		if err != nil || !json.Valid(data) {
+			t.Fatalf("cancelled scan left an invalid SBOM %s: %v", entry.Name(), err)
+		}
+	}
+}
+
+// TestScanCondaCompletedTargetSurvivesSubsequentStop keeps a target that completed
+// before a later cancellation: its observation has no error and its SBOM remains.
+func TestScanCondaCompletedTargetSurvivesSubsequentStop(t *testing.T) {
+	root := t.TempDir()
+	writeCondaPrefix(t, filepath.Join(root, "envs", "a"))
+	writeCondaPrefix(t, filepath.Join(root, "envs", "b"))
+	outputDir := t.TempDir()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	// Cancel when the second target is reserved, after the first write has returned.
+	watcher := &stopAfterFirstSBOM{Context: ctx, dir: outputDir, cancel: cancel, cause: errors.New("operator stop")}
+	report, err := ScanConda(watcher, []string{root}, outputDir)
+	if err == nil {
+		t.Fatal("stopped scan must return an error")
+	}
+	var completed int
+	for _, observation := range report.Observations {
+		if observation.Error == "" {
+			completed++
+			if _, statErr := os.Stat(observation.Result.Path); statErr != nil {
+				t.Fatalf("completed SBOM missing: %v", statErr)
+			}
+		}
+	}
+	if completed != 1 {
+		t.Fatalf("completed observations = %d, want 1: %+v", completed, report.Observations)
+	}
+}
+
+// stopAfterFirstSBOM cancels once a second output is reserved. The first target
+// has returned successfully by then; cancellation must not remove that SBOM.
+type stopAfterFirstSBOM struct {
+	context.Context
+	dir    string
+	cancel context.CancelCauseFunc
+	cause  error
+}
+
+func (s *stopAfterFirstSBOM) Err() error {
+	entries, err := os.ReadDir(s.dir)
+	if err == nil && len(entries) > 1 {
+		s.cancel(s.cause)
+	}
+	return s.Context.Err()
 }
 
 func TestScanCondaNoArtifactsOnPreflightError(t *testing.T) {

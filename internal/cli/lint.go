@@ -109,7 +109,11 @@ func runLint(cmd *cobra.Command, opts *commandOptions, flags *lintFlags, inputs 
 
 	ctx, cancel := operationContext(cmd.Context())
 	defer cancel()
-	snapshot, collectErr := evidence.Collect(ctx, opts.source, inputs, opts.platform, req)
+	progressCtx, stopProgress := startDiscoveryProgress(ctx, cmd.ErrOrStderr(), opts.source == "dir" && opts.format == "text")
+	snapshot, collectErr := evidence.Collect(progressCtx, opts.source, inputs, opts.platform, req)
+	if err := stopProgress(); err != nil {
+		return errors.Join(lintOutput(err), collectErr, ctx.Err())
+	}
 	report := policy.Evaluate(snapshot, effective, time.Now().UTC())
 	if err := lintOutput(renderLint(cmd.OutOrStdout(), report, opts.format, opts.noColor)); err != nil {
 		return err

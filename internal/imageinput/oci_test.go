@@ -29,8 +29,20 @@ func TestLoadOCIAndCleanup(t *testing.T) {
 	if loaded.Identity.Source != "oci-archive" || !strings.HasPrefix(loaded.Identity.ManifestDigest, "sha256:") || !strings.HasPrefix(loaded.Identity.ConfigDigest, "sha256:") || loaded.Identity.OS != "linux" || loaded.Identity.Architecture != "amd64" || loaded.Identity.ConfigDigest == loaded.Identity.ManifestDigest {
 		t.Fatalf("incorrect image identity: %+v", loaded.Identity)
 	}
-	if loaded.Manifest == nil || loaded.Config == nil {
-		t.Fatalf("manifest/config unavailable: %+v", loaded)
+	meta := loaded.Image.Metadata
+	if len(meta.RawManifest) == 0 {
+		t.Fatal("canonical raw manifest unavailable")
+	}
+	if len(loaded.Image.Layers) == 0 || len(meta.Config.RootFS.DiffIDs) != len(loaded.Image.Layers) {
+		t.Fatalf("layers %d do not match config diff IDs %d", len(loaded.Image.Layers), len(meta.Config.RootFS.DiffIDs))
+	}
+	for i, layer := range loaded.Image.Layers {
+		if layer == nil || layer.Metadata.Index != uint(i) || layer.Metadata.Digest != meta.Config.RootFS.DiffIDs[i].String() {
+			t.Fatalf("layer %d metadata does not match config diff ID: %+v", i, layer)
+		}
+	}
+	if meta.ID != loaded.Identity.ConfigDigest || meta.ManifestDigest != loaded.Identity.ManifestDigest {
+		t.Fatalf("identity not projected from canonical metadata: %+v vs %+v", loaded.Identity, meta)
 	}
 	if entries, err := os.ReadDir(parent); err != nil || len(entries) == 0 {
 		t.Fatalf("load did not stage under TMPDIR: %+v, %v", entries, err)
