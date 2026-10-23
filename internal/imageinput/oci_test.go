@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -151,6 +152,22 @@ func TestLayerPathDepthLimit(t *testing.T) {
 	input := testimage.Archive(t, []testimage.Entry{{Name: strings.Repeat("d/", maxLayerPathDepth) + "file", Data: "x"}})
 	if _, err := Load(context.Background(), input, "linux/amd64"); err == nil || !strings.Contains(err.Error(), "depth") {
 		t.Fatalf("deep synthetic tree accepted: %v", err)
+	}
+}
+
+func TestSharedParentsCountOncePerTree(t *testing.T) {
+	// Shared parents should not multiply the index budget by depth per file.
+	entries := make([]testimage.Entry, 1200)
+	for i := range entries {
+		entries[i] = testimage.Entry{Name: fmt.Sprintf("a/b/c/d/e/f/g/h/i/j/item-%04d", i), Data: "x"}
+	}
+	archive := testimage.Archive(t, entries, []testimage.Entry{{Name: "more", Data: "x"}})
+	loaded, err := Load(context.Background(), archive, "linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loaded.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

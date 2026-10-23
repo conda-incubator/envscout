@@ -39,6 +39,7 @@ const maxDescriptors = 256
 const maxIndexDepth = 8
 const maxLayerPathDepth = 128
 const maxLayerNodes = 500000
+const maxLayerPathBytes = 64 << 20
 
 type Identity struct {
 	Source         string `json:"source"`
@@ -54,6 +55,8 @@ type Identity struct {
 type Loaded struct {
 	Image    *image.Image
 	Identity Identity
+	Manifest *v1.Manifest
+	Config   *v1.ConfigFile
 	stage    string
 }
 
@@ -154,7 +157,7 @@ func LoadWithLimits(ctx context.Context, input, platform string, limits Limits) 
 	if img == nil {
 		return nil, errors.Join(fmt.Errorf("image provider returned no image"), gen.Cleanup())
 	}
-	return &Loaded{Image: img, stage: stage, Identity: Identity{
+	return &Loaded{Image: img, Manifest: manifest, Config: config, stage: stage, Identity: Identity{
 		Source: "oci-archive", Input: abs, ManifestDigest: digest.String(), ConfigDigest: manifest.Config.Digest.String(),
 		OS: config.OS, Architecture: config.Architecture, Variant: config.Variant,
 	}}, nil
@@ -395,7 +398,10 @@ func validateLayers(ctx context.Context, stage string, manifest *v1.Manifest, co
 	// Missing parents are synthesized by stereoscope; count them before indexing
 	// so short TAR headers cannot allocate an unbounded deep file tree.
 	indexedNodes := 0
+	allNodes := make(map[string]bool)
+	pathBytes := 0
 	for i, descriptor := range manifest.Layers {
+		layerNodes := make(map[string]bool)
 		filename, err := blobPath(stage, descriptor)
 		if err != nil {
 			return err
@@ -441,11 +447,20 @@ func validateLayers(ctx context.Context, stage string, manifest *v1.Manifest, co
 				err = fmt.Errorf("image layer path depth limit exceeded")
 				break
 			}
-			// Conservative accounting includes each implicit parent and later
-			// intermediate squashes, even when paths may be shared internally.
-			indexedNodes += (strings.Count(name, "/") + 1) * (len(manifest.Layers) - i)
-			if indexedNodes > maxLayerNodes {
-				err = fmt.Errorf("image layer synthesized-node limit exceeded")
+			// Count distinct parents once in this diff and in the accumulated
+			// squash. Keeping deleted paths is a conservative upper bound.
+			for ancestor := name; ancestor != "."; ancestor = path.Dir(ancestor) {
+				layerNodes[ancestor] = true
+				if !allNodes[ancestor] {
+					allNodes[ancestor] = true
+					pathBytes += len(ancestor)
+				}
+				if indexedNodes+len(layerNodes)+len(allNodes) > maxLayerNodes || pathBytes > maxLayerPathBytes {
+					err = fmt.Errorf("image layer synthesized-node/path memory limit exceeded")
+					break
+				}
+			}
+			if err != nil {
 				break
 			}
 			if h.Size < 0 || h.Size > limits.ExpandedBytes-expanded {
@@ -470,6 +485,7 @@ func validateLayers(ctx context.Context, stage string, manifest *v1.Manifest, co
 		if config.RootFS.DiffIDs[i].Algorithm != "sha256" || hex.EncodeToString(hash.Sum(nil)) != config.RootFS.DiffIDs[i].Hex {
 			return fmt.Errorf("OCI layer %d diff ID mismatch", i)
 		}
+		indexedNodes += len(layerNodes) + len(allNodes)
 	}
 	return nil
 }

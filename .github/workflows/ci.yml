@@ -37,6 +37,9 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go test ./...
+      - run: make lint-demo
+        if: runner.os != 'Windows'
+        shell: bash
       - run: go vet ./...
       - name: Build CLI
         run: go build -o ${{ matrix.binary }} ./cmd/envscout
