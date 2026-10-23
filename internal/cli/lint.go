@@ -213,7 +213,11 @@ func renderRules(out io.Writer, format string) error {
 		return json.NewEncoder(out).Encode(policy.ListRules())
 	}
 	for _, rule := range policy.ListRules() {
-		if _, err := fmt.Fprintf(out, "%s  %s\n", rule.ID, lintText(rule.Name)); err != nil {
+		suffix := ""
+		if !rule.Available {
+			suffix = fmt.Sprintf(" (unavailable: %s)", rule.UnavailableReason)
+		}
+		if _, err := fmt.Fprintf(out, "%s  %s%s\n", rule.ID, lintText(rule.Name), lintText(suffix)); err != nil {
 			return err
 		}
 	}
@@ -280,13 +284,13 @@ func renderLint(out io.Writer, report policy.Report, format string, color bool) 
 	counts := make(map[string]int)
 	for _, outcome := range report.Outcomes {
 		counts[outcome.Status]++
-		if outcome.Status == policy.Unknown || outcome.Status == policy.Unavailable {
+		if outcome.Status == policy.Unknown {
 			if _, err := fmt.Fprintf(out, "Check %s %s: %s\n", outcome.RuleID, outcome.Status, lintText(outcome.Reason)); err != nil {
 				return err
 			}
 		}
 	}
-	if _, err := fmt.Fprintf(out, "Summary: %s; %d targets; pass %d, findings %d, unknown %d, not applicable %d, disabled %d, unavailable %d, suppressed %d\n", report.Status, len(report.Targets), counts["pass"], counts["finding"], counts["unknown"], counts["not_applicable"], counts["disabled"], counts["unavailable"], counts["suppressed"]); err != nil {
+	if _, err := fmt.Fprintf(out, "Summary: %s; %d targets; pass %d, findings %d, unknown %d, not applicable %d, disabled %d, suppressed %d\n", report.Status, len(report.Targets), counts["pass"], counts["finding"], counts["unknown"], counts["not_applicable"], counts["disabled"], counts["suppressed"]); err != nil {
 		return err
 	}
 	for _, issue := range report.Issues {

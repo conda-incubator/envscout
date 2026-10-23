@@ -72,13 +72,6 @@ var registry = []Rule{
 		Exceptions: []string{"Compressed descriptor bytes describe whole layers, never per-file reclaimable savings.", "Surviving cache hardlinks must not be classified as runtime-unused content."},
 	},
 	{
-		ID: "IC005", Version: "1", Name: "Runtime stage review", Category: "runtime-layout",
-		Description: "Contextual runtime-stage advice based on independently observed cache and tooling facts; never an additional CI failure.",
-		TargetKinds: []string{"oci-archive"}, Capabilities: []string{"prefixes", "tooling-prefix", "final-cache", "runtime-config", "os-package-tools"}, Available: true,
-		References: []string{dockerStageReference, distrolessReference, metadataReference},
-		Exceptions: []string{"Image contents cannot establish Dockerfile build stages or compatible runtime ABI."},
-	},
-	{
 		ID: "IC006", Version: "1", Name: "OS package-manager commands", Category: "runtime-tooling",
 		Description: "Confirmed OS package-manager command tooling remains at inspected final-image command locations.",
 		TargetKinds: []string{"oci-archive"}, Capabilities: []string{"os-package-tools"}, Available: true,
@@ -127,8 +120,6 @@ func init() {
 			case "IC004":
 				d.Enabled = runtime
 				d.Severity = "warning"
-			case "IC005":
-				d.Enabled = runtime
 			case "IC007":
 				d.Enabled = profile == "container-distroless"
 				if d.Enabled {
@@ -140,14 +131,11 @@ func init() {
 	}
 }
 
-// ListRules lists implemented predicates only. Unavailable design entries are
-// disclosed in evaluation outcomes, not advertised as implemented checks.
+// ListRules lists every registered rule, including unavailable design entries
+// disclosed with their reason.
 func ListRules() []Rule {
 	rules := make([]Rule, 0, len(registry))
 	for _, rule := range registry {
-		if !rule.Available {
-			continue
-		}
 		rule.TargetKinds = slices.Clone(rule.TargetKinds)
 		rule.Capabilities = slices.Clone(rule.Capabilities)
 		rule.References = slices.Clone(rule.References)

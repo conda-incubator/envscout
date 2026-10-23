@@ -65,10 +65,28 @@ func TestLintLocalPolicyAndExitCodes(t *testing.T) {
 	}
 }
 
-func TestLintListsOnlyImplementedRules(t *testing.T) {
+func TestLintListsAllRegisteredRules(t *testing.T) {
 	output, err := executeLint(t, "--list-rules", "--format", "json")
-	if err != nil || !json.Valid([]byte(output)) || !strings.Contains(output, "IC006") || strings.Contains(output, `"id":"EC002"`) {
+	var listed []struct {
+		ID                string `json:"id"`
+		Available         bool   `json:"available"`
+		UnavailableReason string `json:"unavailable_reason"`
+	}
+	if err != nil || json.Unmarshal([]byte(output), &listed) != nil || len(listed) != 10 {
 		t.Fatalf("incorrect rules listing: %v %s", err, output)
+	}
+	for _, rule := range listed {
+		if rule.ID == "EC002" || rule.ID == "EC003" {
+			if rule.Available || rule.UnavailableReason == "" {
+				t.Fatalf("unavailable rule not disclosed: %+v", rule)
+			}
+		} else if !rule.Available || rule.UnavailableReason != "" {
+			t.Fatalf("bad listed rule: %+v", rule)
+		}
+	}
+	output, err = executeLint(t, "--list-rules")
+	if err != nil || !strings.Contains(output, "EC002") || !strings.Contains(output, "unavailable") {
+		t.Fatalf("text rules listing hides unavailable rules: %v %s", err, output)
 	}
 }
 
@@ -106,7 +124,7 @@ func TestLintImageMultipleRulesAndLayerRetention(t *testing.T) {
 	if ExitCode(err) != 1 || !json.Valid([]byte(output)) {
 		t.Fatalf("runtime image lint: %v %s", err, output)
 	}
-	for _, rule := range []string{"IC001", "IC002", "IC003", "IC004", "IC005", "IC006"} {
+	for _, rule := range []string{"IC001", "IC002", "IC003", "IC004", "IC006"} {
 		if !strings.Contains(output, `"rule_id": "`+rule+`"`) {
 			t.Errorf("missing rule %s: %s", rule, output)
 		}

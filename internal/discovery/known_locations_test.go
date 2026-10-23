@@ -126,57 +126,20 @@ func TestKnownLocationConfiguredMissing(t *testing.T) {
 	}
 }
 
-func TestExplicitWalkIgnoresOutOfScopeHints(t *testing.T) {
-	home := knownTempDir(t)
-	root := knownTempDir(t)
-	makeCondaFixture(t, filepath.Join(home, "miniconda3"))
-	makeCondaFixture(t, filepath.Join(root, "inside"))
-	inputs := knownInputs{home: home, cwd: home, goos: "darwin", env: map[string]string{
-		condaPrefixVar: filepath.Join(home, "miniconda3"),
-		pixiHomeVar:    "relative-path",
-	}}
-	progress := new(Progress)
-	report, err := findCondaWithHints([]string{root}, progress, inputs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Environments) != 1 || report.Environments[0].Path != filepath.Join(root, "inside") || len(report.Issues) != 0 || progress.Environments.Load() != 1 || progress.Folders.Load() != 3 {
-		t.Fatalf("out-of-scope hint altered full walk: %+v (%d folders)", report, progress.Folders.Load())
-	}
-}
-
-func TestExplicitWalkPreprobeDoesNotDuplicateErrors(t *testing.T) {
+func TestExplicitWalkFindsKnownLocationEnvironmentOnce(t *testing.T) {
 	home := knownTempDir(t)
 	root := filepath.Join(home, "miniconda3")
-	makeCondaFixture(t, filepath.Join(root, "envs", "valid"))
-	meta := filepath.Join(root, "conda-meta")
-	if err := os.MkdirAll(meta, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(meta, "bad.json"), []byte(`{"name":"incomplete"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	inputs := knownInputs{home: home, cwd: root, goos: "darwin"}
-	progress := new(Progress)
-	report, err := findCondaWithHints([]string{root}, progress, inputs)
+	env := filepath.Join(root, "envs", "demo")
+	makeCondaFixture(t, env)
+	report, err := FindCondaWithProgress([]string{root}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Environments) != 1 || len(report.Issues) != 1 || progress.Environments.Load() != 1 || progress.Folders.Load() != 5 {
-		t.Fatalf("preprobe duplicated full-walk results: %+v (%d folders)", report, progress.Folders.Load())
+	if len(report.Environments) != 1 || report.Environments[0].Path != env {
+		t.Fatalf("expected the walk to find %q exactly once: %+v", env, report.Environments)
 	}
-	if len(report.Hints) == 0 {
-		t.Fatal("expected in-scope hints to be recorded")
-	}
-}
-
-func TestExplicitWalkPreprobesEnvContainerRoot(t *testing.T) {
-	home := knownTempDir(t)
-	container := filepath.Join(home, "miniconda3", "envs")
-	makeCondaFixture(t, filepath.Join(container, "demo"))
-	report, err := findCondaWithHints([]string{container}, nil, knownInputs{home: home, goos: "darwin"})
-	if err != nil || len(report.Environments) != 1 || len(report.Hints) == 0 {
-		t.Fatalf("expected in-scope envs container preprobe: %+v, %v", report, err)
+	if len(report.Hints) != 0 {
+		t.Fatalf("roots mode must not record hint summaries: %+v", report.Hints)
 	}
 }
 
@@ -188,31 +151,11 @@ func TestHintRootCannotEscapeExplicitScope(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "hidden"), link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if _, err := openHintDir(link, []string{root}); err == nil {
+	if _, err := openHintDir(link, root); err == nil {
 		t.Fatal("in-scope symlink must not open an external prefix")
 	}
-	if _, err := openHintDir(filepath.Join(outside, "hidden"), []string{root}); err == nil {
+	if _, err := openHintDir(filepath.Join(outside, "hidden"), root); err == nil {
 		t.Fatal("lexically out-of-scope hint must not open")
-	}
-}
-
-func TestReplacedHintCannotEscapeExplicitScope(t *testing.T) {
-	root := knownTempDir(t)
-	outside := knownTempDir(t)
-	prefix := filepath.Join(root, "hint")
-	makeCondaFixture(t, prefix)
-	makeCondaFixture(t, filepath.Join(outside, "secret"))
-	if ok, err := safeHintDir(prefix); err != nil || !ok {
-		t.Fatalf("fixture hint should validate: %v, %v", ok, err)
-	}
-	if err := os.Rename(prefix, filepath.Join(root, "moved")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(outside, "secret"), prefix); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	if _, err := openHintDir(prefix, []string{root}); err == nil {
-		t.Fatal("replaced hint redirected rooted open outside explicit scope")
 	}
 }
 

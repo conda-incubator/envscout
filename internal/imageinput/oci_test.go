@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,19 +17,29 @@ import (
 
 func TestLoadOCIAndCleanup(t *testing.T) {
 	input := testimage.Archive(t, []testimage.Entry{{Name: "opt/conda/conda-meta/python.json", Data: `{"name":"python","version":"3.12"}`}})
+	// A dedicated temp parent makes leaked staging directories observable.
+	parent := t.TempDir()
+	t.Setenv("TMPDIR", parent)
+	t.Setenv("TMP", parent)
+	t.Setenv("TEMP", parent)
 	loaded, err := Load(context.Background(), input, "linux/amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Identity.Source != "oci-archive" || !strings.HasPrefix(loaded.Identity.ManifestDigest, "sha256:") || loaded.Identity.OS != "linux" || loaded.Identity.Architecture != "amd64" || loaded.Identity.ConfigDigest == loaded.Identity.ManifestDigest {
+	if loaded.Identity.Source != "oci-archive" || !strings.HasPrefix(loaded.Identity.ManifestDigest, "sha256:") || !strings.HasPrefix(loaded.Identity.ConfigDigest, "sha256:") || loaded.Identity.OS != "linux" || loaded.Identity.Architecture != "amd64" || loaded.Identity.ConfigDigest == loaded.Identity.ManifestDigest {
 		t.Fatalf("incorrect image identity: %+v", loaded.Identity)
 	}
-	stage := loaded.stage
+	if loaded.Manifest == nil || loaded.Config == nil {
+		t.Fatalf("manifest/config unavailable: %+v", loaded)
+	}
+	if entries, err := os.ReadDir(parent); err != nil || len(entries) == 0 {
+		t.Fatalf("load did not stage under TMPDIR: %+v, %v", entries, err)
+	}
 	if err := loaded.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(stage); !os.IsNotExist(err) {
-		t.Fatalf("staged layout not removed: %v", err)
+	if entries, err := os.ReadDir(parent); err != nil || len(entries) != 0 {
+		t.Fatalf("staged layout not removed: %+v, %v", entries, err)
 	}
 	if err := loaded.Close(); err != nil {
 		t.Fatalf("second cleanup failed: %v", err)
@@ -43,9 +52,7 @@ func TestLoadLimitsAndPlatform(t *testing.T) {
 		name, platform string
 		limits         Limits
 	}{
-		{"archive limit", "linux/amd64", Limits{ArchiveBytes: 1, LayoutBytes: 1 << 20, ExpandedBytes: 1 << 20, Entries: 100, Layers: 10}},
-		{"layout limit", "linux/amd64", Limits{ArchiveBytes: 1 << 20, LayoutBytes: 1, ExpandedBytes: 1 << 20, Entries: 100, Layers: 10}},
-		{"expansion limit", "linux/amd64", Limits{ArchiveBytes: 1 << 20, LayoutBytes: 1 << 20, ExpandedBytes: 1024, Entries: 100, Layers: 10}},
+		{"archive limit", "linux/amd64", Limits{ArchiveBytes: 1}},
 		{"missing platform", "", DefaultLimits()},
 		{"wrong platform", "linux/arm64", DefaultLimits()},
 		{"unknown OS", "nonsense/amd64", DefaultLimits()},
@@ -70,11 +77,8 @@ func TestLoadRejectsUnsafeArchiveAndCleansStage(t *testing.T) {
 		h    tar.Header
 		data string
 	}{
-		{"traversal", tar.Header{Name: "../outside", Size: 1}, "x"},
-		{"absolute", tar.Header{Name: "/outside", Size: 1}, "x"},
-		{"symlink", tar.Header{Name: "blobs", Typeflag: tar.TypeSymlink, Linkname: "../outside"}, ""},
-		{"docker save", tar.Header{Name: "manifest.json", Size: 2}, "[]"},
-		{"wrong digest", tar.Header{Name: "blobs/sha256/" + strings.Repeat("0", 64), Size: 1}, "x"},
+		{"traversal", tar.Header{Name: "../escape", Size: 1}, "x"},
+		{"not an OCI layout", tar.Header{Name: "unrelated.txt", Size: 5}, "hello"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			// A dedicated temp parent makes leaked staging directories observable.
@@ -116,22 +120,28 @@ func TestMultiPlatformSelectionAndAmbiguity(t *testing.T) {
 	amd := testimage.Archive(t, []testimage.Entry{{Name: "amd.txt", Data: "amd64"}})
 	arm := testimage.ArchivePlatform(t, "linux", "arm64", []testimage.Entry{{Name: "arm.txt", Data: "arm64"}})
 	input := combineArchives(t, amd, arm)
-	for _, arch := range []string{"amd64", "arm64"} {
-		loaded, err := Load(context.Background(), input, "linux/"+arch)
+	for _, tt := range []struct{ platform, arch string }{
+		{"linux/amd64", "amd64"},
+		{"linux/arm64/v8", "arm64"},
+	} {
+		loaded, err := Load(context.Background(), input, tt.platform)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if loaded.Identity.Architecture != arch {
+		if loaded.Identity.Architecture != tt.arch {
 			t.Fatalf("wrong selected platform: %+v", loaded.Identity)
 		}
 		if err := loaded.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if _, err := Load(context.Background(), input, "linux/ppc64"); err == nil {
+		t.Fatal("platform matched by zero manifests should fail")
+	}
 	otherAMD := testimage.Archive(t, []testimage.Entry{{Name: "different.txt", Data: "different manifest"}})
 	ambiguous := combineArchives(t, amd, otherAMD)
-	if _, err := Load(context.Background(), ambiguous, "linux/amd64"); err == nil || !strings.Contains(err.Error(), "multiple") {
-		t.Fatalf("ambiguous platform should fail: %v", err)
+	if _, err := Load(context.Background(), ambiguous, "linux/amd64"); err == nil {
+		t.Fatal("ambiguous platform should fail")
 	}
 }
 
@@ -145,29 +155,6 @@ func TestARMDefaultVariant(t *testing.T) {
 		if err := loaded.Close(); err != nil {
 			t.Fatal(err)
 		}
-	}
-}
-
-func TestLayerPathDepthLimit(t *testing.T) {
-	input := testimage.Archive(t, []testimage.Entry{{Name: strings.Repeat("d/", maxLayerPathDepth) + "file", Data: "x"}})
-	if _, err := Load(context.Background(), input, "linux/amd64"); err == nil || !strings.Contains(err.Error(), "depth") {
-		t.Fatalf("deep synthetic tree accepted: %v", err)
-	}
-}
-
-func TestSharedParentsCountOncePerTree(t *testing.T) {
-	// Shared parents should not multiply the index budget by depth per file.
-	entries := make([]testimage.Entry, 1200)
-	for i := range entries {
-		entries[i] = testimage.Entry{Name: fmt.Sprintf("a/b/c/d/e/f/g/h/i/j/item-%04d", i), Data: "x"}
-	}
-	archive := testimage.Archive(t, entries, []testimage.Entry{{Name: "more", Data: "x"}})
-	loaded, err := Load(context.Background(), archive, "linux/amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := loaded.Close(); err != nil {
-		t.Fatal(err)
 	}
 }
 

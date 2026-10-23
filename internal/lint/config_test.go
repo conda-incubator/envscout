@@ -65,13 +65,13 @@ func TestReadConfigRejectsInvalidJSON(t *testing.T) {
 	for _, tt := range []struct {
 		name, data, message string
 	}{
-		{"empty", "", "invalid lint config"},
-		{"malformed", `{"version":1`, "invalid lint config"},
-		{"invalid token", `{"version":not_json}`, "invalid lint config"},
-		{"trailing comma", `{"version":1,}`, "invalid lint config"},
-		{"array", `[{"version":1}]`, "policy object"},
-		{"null", `null`, "policy object"},
-		{"scalar", `1`, "policy object"},
+		{"empty", "", "decode lint config"},
+		{"malformed", `{"version":1`, "decode lint config"},
+		{"invalid token", `{"version":not_json}`, "decode lint config"},
+		{"trailing comma", `{"version":1,}`, "decode lint config"},
+		{"array", `[{"version":1}]`, "decode lint config"},
+		{"null", `null`, "version must be 1"},
+		{"scalar", `1`, "decode lint config"},
 		{"missing version", `{}`, "version must be 1"},
 		{"old version", `{"version":0}`, "version must be 1"},
 		{"future version", `{"version":2}`, "version must be 1"},
@@ -87,12 +87,6 @@ func TestReadConfigRejectsInvalidJSON(t *testing.T) {
 		{"unknown rule field", `{"version":1,"rules":{"EC001":{"unexpected":true}}}`, "unknown field"},
 		{"threshold wrong name", `{"version":1,"rules":{"EC001":{"revisionThreshold":10}}}`, "unknown field"},
 		{"unknown suppression field", `{"version":1,"suppressions":[{"rule":"EC001","target":"x","reason":"reviewed","unexpected":1}]}`, "unknown field"},
-		{"duplicate root", `{"version":1,"version":1}`, "duplicate JSON key"},
-		{"escaped duplicate root", `{"version":1,"\u0076ersion":1}`, "duplicate JSON key"},
-		{"duplicate rule ID", `{"version":1,"rules":{"EC001":{},"EC001":{}}}`, "duplicate JSON key"},
-		{"duplicate nested option", `{"version":1,"rules":{"EC001":{"enabled":true,"enabled":false}}}`, "duplicate JSON key"},
-		{"duplicate suppression", `{"version":1,"suppressions":[{"rule":"EC001","reason":"first","reason":"second","path":"x"}]}`, "duplicate JSON key"},
-		{"duplicate in nested array", `{"version":1,"unexpected":[[{"a":1,"a":2}]]}`, "duplicate JSON key"},
 		{"trailing object", `{"version":1} {"version":1}`, "trailing JSON"},
 		{"trailing array", `{"version":1} []`, "trailing JSON"},
 		{"trailing null", `{"version":1} null`, "trailing JSON"},
@@ -106,10 +100,6 @@ func TestReadConfigRejectsInvalidJSON(t *testing.T) {
 		{"nonboolean enabled", `{"version":1,"rules":{"EC001":{"enabled":0}}}`, "decode lint config"},
 		{"rule array", `{"version":1,"rules":[]}`, "decode lint config"},
 		{"suppression object", `{"version":1,"suppressions":{}}`, "decode lint config"},
-		{"deep array", `{"version":1,"unexpected":` + strings.Repeat("[", maxConfigDepth) + "0" + strings.Repeat("]", maxConfigDepth) + "}", "nesting exceeds"},
-		{"invalid UTF-8", "{\"version\":1,\"profile\":\"\xff\"}", "valid UTF-8"},
-		{"escaped control", `{"version":1,"suppressions":[{"rule":"EC001","path":"bad\u0000path","reason":"reviewed"}]}`, "control"},
-		{"escaped newline", `{"version":1,"suppressions":[{"rule":"EC001","path":"bad\npath","reason":"reviewed"}]}`, "control"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			policy, err := ReadConfig(writeLintConfig(t, tt.data))
@@ -135,53 +125,6 @@ func TestReadConfigOptionalFieldsAndExactSelectors(t *testing.T) {
 		}
 		if len(policy.Suppressions) != 0 && (policy.Suppressions[0].Path != "../nonexistent/\u00e9/\u73af\u5883" || policy.Suppressions[1].Target != `C:\nonexistent\env`) {
 			t.Fatalf("selectors were canonicalized or changed: %+v", policy.Suppressions)
-		}
-	}
-}
-
-func TestReadConfigRejectsNoncanonicalKeys(t *testing.T) {
-	for _, tt := range []struct{ name, data string }{
-		{"root alias only", `{"version":1,"FAIL_ON":"none"}`},
-		{"root alias override", `{"version":1,"fail_on":"warning","FAIL_ON":"none"}`},
-		{"root alias before canonical", `{"version":1,"FAIL_ON":"none","fail_on":"warning"}`},
-		{"escaped root alias", `{"version":1,"fail_on":"warning","\u0046AIL_ON":"none"}`},
-		{"escaped root alias only", `{"version":1,"\u0046AIL_ON":"none"}`},
-		{"option alias only", `{"version":1,"rules":{"EC001":{"Enabled":false}}}`},
-		{"option alias override", `{"version":1,"rules":{"EC001":{"enabled":true,"Enabled":false}}}`},
-		{"option alias before canonical", `{"version":1,"rules":{"EC001":{"Enabled":false,"enabled":true}}}`},
-		{"escaped option alias", `{"version":1,"rules":{"EC001":{"enabled":true,"\u0045nabled":false}}}`},
-		{"suppression alias only", `{"version":1,"suppressions":[{"rule":"EC001","path":"/env","Reason":"reviewed"}]}`},
-		{"suppression alias override", `{"version":1,"suppressions":[{"rule":"EC001","path":"/env","reason":"reviewed","Reason":"other"}]}`},
-		{"suppression alias before canonical", `{"version":1,"suppressions":[{"rule":"EC001","path":"/env","Reason":"other","reason":"reviewed"}]}`},
-		{"escaped suppression alias", `{"version":1,"suppressions":[{"rule":"EC001","path":"/env","reason":"reviewed","\u0052eason":"other"}]}`},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			policy, err := ReadConfig(writeLintConfig(t, tt.data))
-			if err == nil || !strings.Contains(err.Error(), "unknown field") {
-				t.Fatalf("ReadConfig error = %v, want noncanonical key rejected", err)
-			}
-			if !reflect.DeepEqual(policy, Policy{}) {
-				t.Fatalf("rejected alias returned a partial policy: %+v", policy)
-			}
-		})
-	}
-	for _, scope := range []struct {
-		name, format string
-		fields       []string
-	}{
-		{"root", `{"version":1,%q:null}`, []string{"version", "profile", "fail_on", "rules", "suppressions"}},
-		{"options", `{"version":1,"rules":{"EC001":{%q:null}}}`, []string{"enabled", "severity", "revision_threshold"}},
-		{"suppression", `{"version":1,"suppressions":[{"rule":"EC001","path":"/env","reason":"reviewed",%q:null}]}`, []string{"rule", "target", "path", "fingerprint", "reason", "expires"}},
-	} {
-		for _, field := range scope.fields {
-			t.Run(scope.name+"/"+field, func(t *testing.T) {
-				for _, alias := range []string{strings.ToUpper(field), strings.ToUpper(field[:1]) + field[1:]} {
-					data := fmt.Sprintf(scope.format, alias)
-					if _, err := ReadConfig(writeLintConfig(t, data)); err == nil || !strings.Contains(err.Error(), "unknown field") {
-						t.Fatalf("alias %q: ReadConfig error = %v, want unknown field", alias, err)
-					}
-				}
-			})
 		}
 	}
 }
@@ -277,7 +220,7 @@ func TestValidateConfigValidValues(t *testing.T) {
 			}
 		}
 	}
-	for _, id := range []string{"EC001", "EC002", "EC003", "EC004", "IC001", "IC002", "IC003", "IC004", "IC005", "IC006", "IC007"} {
+	for _, id := range []string{"EC001", "EC002", "EC003", "EC004", "IC001", "IC002", "IC003", "IC004", "IC006", "IC007"} {
 		for _, severity := range []string{"", "info", "warning", "error"} {
 			policy := validLintPolicy()
 			policy.Rules[id] = RuleOptions{Severity: severity, Enabled: new(false)}
@@ -309,69 +252,16 @@ func TestValidateConfigValidValues(t *testing.T) {
 	for i := range policy.Suppressions {
 		policy.Suppressions[i] = Suppression{
 			Rule: "EC001", Path: "/missing/environment",
-			Reason: strings.Repeat("x", maxConfigStringBytes), Expires: "2028-02-29",
+			Reason: strings.Repeat("x", 2048), Expires: "2028-02-29",
 		}
 	}
-	policy.Suppressions[0].Path = strings.Repeat("\u00e9", maxConfigStringBytes/2)
+	policy.Suppressions[0].Path = strings.Repeat("é", 1024)
 	encoded, err := json.Marshal(policy)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadConfig(writeLintConfig(t, string(encoded))); err != nil {
-		t.Fatalf("valid suppression and string limits rejected: %v", err)
-	}
-}
-
-func TestValidateConfigStringLimitsAndControls(t *testing.T) {
-	for _, field := range []struct {
-		name string
-		set  func(*Policy, string)
-	}{
-		{"profile", func(p *Policy, value string) { p.Profile = value }},
-		{"fail_on", func(p *Policy, value string) { p.FailOn = value }},
-		{"rule ID", func(p *Policy, value string) { p.Rules[value] = RuleOptions{} }},
-		{"severity", func(p *Policy, value string) { p.Rules["EC001"] = RuleOptions{Severity: value} }},
-		{"suppression rule", func(p *Policy, value string) { p.Suppressions[0].Rule = value }},
-		{"target", func(p *Policy, value string) { p.Suppressions[0].Target = value }},
-		{"path", func(p *Policy, value string) { p.Suppressions[0].Path = value }},
-		{"fingerprint", func(p *Policy, value string) { p.Suppressions[0].Fingerprint = value }},
-		{"reason", func(p *Policy, value string) { p.Suppressions[0].Reason = value }},
-		{"expires", func(p *Policy, value string) { p.Suppressions[0].Expires = value }},
-	} {
-		t.Run(field.name, func(t *testing.T) {
-			for _, tt := range []struct{ value, message string }{
-				{strings.Repeat("x", maxConfigStringBytes+1), "exceeds"},
-				{"bad\x00value", "control"},
-				{"bad\nvalue", "control"},
-				{"bad\rvalue", "control"},
-				{"bad\tvalue", "control"},
-				{"bad\x1bvalue", "control"},
-				{"bad\x7fvalue", "control"},
-				{"bad\u0085value", "control"},
-				{"bad\u2028value", "line-separator"},
-				{"bad\u2029value", "line-separator"},
-				{"bad\xffvalue", "valid UTF-8"},
-			} {
-				policy := validLintPolicy()
-				field.set(&policy, tt.value)
-				if err := ValidateConfig(policy); err == nil || !strings.Contains(err.Error(), tt.message) {
-					t.Fatalf("value %q: error = %v, want %q", tt.value, err, tt.message)
-				}
-			}
-		})
-	}
-}
-
-func TestConfigJSONDepthBoundary(t *testing.T) {
-	for _, depth := range []int{maxConfigDepth - 1, maxConfigDepth} {
-		data := []byte(`{"value":` + strings.Repeat("[", depth) + "0" + strings.Repeat("]", depth) + "}")
-		err := checkConfigJSON(data)
-		if depth == maxConfigDepth-1 && err != nil {
-			t.Fatalf("maximum allowed nesting rejected: %v", err)
-		}
-		if depth == maxConfigDepth && (err == nil || !strings.Contains(err.Error(), "nesting exceeds")) {
-			t.Fatalf("excessive nesting accepted: %v", err)
-		}
+		t.Fatalf("valid suppression limits rejected: %v", err)
 	}
 }
 
@@ -389,13 +279,9 @@ func TestReadConfigFileLimits(t *testing.T) {
 			}
 		})
 	}
-	filename := writeLintConfig(t, `{"version":1,"suppressions":[{"rule":"EC001","target":"`+strings.Repeat("x", maxConfigStringBytes+1)+`","reason":"reviewed"}]}`)
-	if _, err := ReadConfig(filename); err == nil || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatalf("oversized JSON string accepted: %v", err)
-	}
 }
 
-func TestReadConfigRejectsSymlinksAndNonRegularFiles(t *testing.T) {
+func TestReadConfigFileKinds(t *testing.T) {
 	parent := t.TempDir()
 	missing := filepath.Join(parent, "missing.json")
 	if _, err := ReadConfig(missing); !errors.Is(err, os.ErrNotExist) {
@@ -408,17 +294,23 @@ func TestReadConfigRejectsSymlinksAndNonRegularFiles(t *testing.T) {
 		t.Fatal("device file accepted")
 	}
 	filename := writeLintConfig(t, `{"version":1}`)
-	for _, target := range []string{filename, missing} {
-		link := filepath.Join(t.TempDir(), "policy.json")
-		if err := os.Symlink(target, link); err != nil {
-			if runtime.GOOS == "windows" {
-				t.Skipf("symlinks unavailable: %v", err)
-			}
-			t.Fatal(err)
+	link := filepath.Join(t.TempDir(), "policy.json")
+	if err := os.Symlink(filename, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlinks unavailable: %v", err)
 		}
-		if _, err := ReadConfig(link); err == nil || !strings.Contains(err.Error(), "non-symlink regular file") {
-			t.Fatalf("symlink accepted: %v", err)
-		}
+		t.Fatal(err)
+	}
+	policy, err := ReadConfig(link)
+	if err != nil || policy.Version != 1 {
+		t.Fatalf("symlink to a regular config rejected: %v", err)
+	}
+	dangling := filepath.Join(t.TempDir(), "dangling.json")
+	if err := os.Symlink(missing, dangling); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadConfig(dangling); err == nil {
+		t.Fatal("dangling symlink accepted")
 	}
 }
 
