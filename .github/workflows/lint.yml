@@ -16,15 +16,29 @@ concurrency:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    env:
+      # golangci-lint loads packages that import go-rattler, so cgo flags
+      # must match the native build used by `make`.
+      CGO_ENABLED: "1"
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+        with:
+          toolchain: stable
+          cache: true
+          cache-directories: .go-rattler-native
+          cache-key: lint-linux-amd64
       - name: Check formatting
         run: test -z "$(gofmt -l cmd internal)"
+      - name: Build native go-rattler
+        run: make native
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9.3.0
         with:
           version: v2.14.0
+        env:
+          CGO_LDFLAGS: -L${{ github.workspace }}/.go-rattler-native/release

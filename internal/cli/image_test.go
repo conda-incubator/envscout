@@ -31,7 +31,7 @@ func TestImageFindAndScan(t *testing.T) {
 	var output, warnings bytes.Buffer
 	cmd.SetOut(&output)
 	cmd.SetErr(&warnings)
-	cmd.SetArgs([]string{"find", "--source", "oci-archive", "--platform", "linux/amd64", "--json", archive})
+	cmd.SetArgs([]string{"find", "--source", "oci-archive", "--platform", "linux/amd64", "--format", "json", archive})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("find image: %v: %s", err, warnings.String())
 	}

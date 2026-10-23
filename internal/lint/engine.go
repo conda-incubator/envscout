@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/anaconda/envscout/internal/evidence"
 )
@@ -69,15 +70,10 @@ func BuildPolicy(config Policy, options Options) (Policy, error) {
 		if source != "oci-archive" {
 			return Policy{}, fmt.Errorf("runtime prefix requires an OCI image source")
 		}
-		if !path.IsAbs(options.RuntimePrefix) || strings.Contains(options.RuntimePrefix, "\\") {
-			return Policy{}, fmt.Errorf("runtime prefix must be an absolute image POSIX path")
+		if err := validateRuntimePrefix(options.RuntimePrefix); err != nil {
+			return Policy{}, err
 		}
-		for _, part := range strings.Split(options.RuntimePrefix, "/") {
-			if part == ".." {
-				return Policy{}, fmt.Errorf("runtime prefix must not contain parent traversal")
-			}
-		}
-		p.RuntimePrefix = path.Clean(options.RuntimePrefix)
+		p.RuntimePrefix = options.RuntimePrefix
 	}
 	if options.Project != "" {
 		if source != "dir" {
@@ -179,6 +175,22 @@ func Requirements(policy Policy) evidence.Request {
 	}
 	slices.Sort(request.Capabilities)
 	return request
+}
+
+// validateRuntimePrefix accepts only an exact clean absolute POSIX image path.
+// Dirty input is rejected rather than normalized so callers cannot pass a
+// different path than the one they asserted. It performs no filesystem I/O.
+func validateRuntimePrefix(prefix string) error {
+	if strings.IndexFunc(prefix, func(r rune) bool { return r == '\\' || unicode.IsControl(r) }) >= 0 {
+		return fmt.Errorf("runtime prefix must not contain backslashes or control characters")
+	}
+	if !path.IsAbs(prefix) {
+		return fmt.Errorf("runtime prefix must be an absolute image POSIX path")
+	}
+	if path.Clean(prefix) != prefix {
+		return fmt.Errorf("runtime prefix must be a clean path without parent traversal or redundant separators")
+	}
+	return nil
 }
 
 func ruleEnabled(policy Policy, id string) bool {

@@ -22,13 +22,13 @@ import (
 // Result describes what Syft cataloged from an installed prefix or image.
 // PythonInstalled counts Python installation metadata, not necessarily pip installs.
 type Result struct {
-	Path            string
-	SyftVersion     string
-	Conda           int
-	PythonInstalled int
-	Other           int
-	Total           int // Unique packages, not CycloneDX components.
-	Unknowns        int // File coordinates with unknowns, not individual diagnostic messages.
+	Path            string `json:"path"`
+	SyftVersion     string `json:"syft_version"`
+	Conda           int    `json:"conda"`
+	PythonInstalled int    `json:"python_installed"`
+	Other           int    `json:"other"`
+	Total           int    `json:"total"`    // Unique packages, not CycloneDX components.
+	Unknowns        int    `json:"unknowns"` // File coordinates with unknowns, not individual diagnostic messages.
 }
 
 // Filename identifies a prefix by a readable folder name and its absolute path.

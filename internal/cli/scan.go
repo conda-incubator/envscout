@@ -1,111 +1,103 @@
 package cli
 
 import (
-	"fmt"
-	"path/filepath"
-	"sync/atomic"
+	"errors"
+	"strconv"
 	"time"
 
-	"github.com/anaconda/envscout/internal/discovery"
 	"github.com/anaconda/envscout/internal/inventory"
 	"github.com/spf13/cobra"
 )
 
-func runScan(cmd *cobra.Command, roots []string) error {
-	started := time.Now()
-	report, err := findCondaWithStatus(roots, cmd.ErrOrStderr())
-	if err != nil {
-		return err
-	}
-	discoveryDuration := time.Since(started)
-	outputDir, err := filepath.Abs("sboms")
-	if err != nil {
-		return err
-	}
-	type observation struct {
-		env      discovery.Environment
-		result   inventory.Result
-		duration time.Duration
-		pixi     string
-		err      error
-	}
-	observations := make([]observation, 0, len(report.Environments))
-	var processed atomic.Uint64
-	status := startStatus(cmd.ErrOrStderr(), func() string {
-		return fmt.Sprintf("SBOMs processed: %d/%d", processed.Load(), len(report.Environments))
-	})
-	for _, env := range report.Environments {
-		start := time.Now()
-		result, scanErr := inventory.WriteConda(cmd.Context(), env, outputDir)
-		item := observation{env: env, result: result, duration: time.Since(start), err: scanErr}
-		if scanErr == nil {
-			item.pixi = pixiLockSummary(env.Path)
-		}
-		observations = append(observations, item)
-		processed.Add(1)
-	}
-	status.close()
-
-	out := cmd.OutOrStdout()
-	if _, err := fmt.Fprintf(out, "Scan evidence | %s\n\n", started.Format(time.RFC3339)); err != nil {
-		return err
-	}
-	failures := 0
-	for _, item := range observations {
-		if _, err := fmt.Fprintf(out, "%s  (revision %s)\n  Prefix: %s\n  Duration: %s\n", item.env.Name, formatRevision(item.env.Revision, false), item.env.Path, item.duration.Round(time.Millisecond)); err != nil {
-			return err
-		}
-		if item.err != nil {
-			failures++
-			if _, err := fmt.Fprintf(out, "  SBOM: not written (%v)\n\n", item.err); err != nil {
+func scanCommand(opts *commandOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "scan ROOT...",
+		Short: "Write prefix SBOMs for directories or one whole-image SBOM for an OCI archive",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, inputs []string) error {
+			if cmd.Flags().Changed("output-dir") && opts.outputDir == "" {
+				return inputError(errors.New("--output-dir must not be empty"))
+			}
+			if err := validateImageArgs(opts.source, opts.platform, inputs); err != nil {
 				return err
 			}
+			// The domain resolves a relative output directory against the working
+			// directory and returns any incomplete-scan error; the CLI only renders.
+			if opts.source == "oci-archive" {
+				ctx, cancel := operationContext(cmd.Context())
+				defer cancel()
+				report, err := inventory.InspectImage(ctx, inputs[0], opts.platform, opts.outputDir)
+				if err != nil && opts.format == "text" && report.Image.ManifestDigest == "" {
+					return err
+				}
+				return errors.Join(renderImage(cmd, opts, report, true), err)
+			}
+			report, err := inventory.ScanConda(cmd.Context(), inputs, opts.outputDir)
+			// A text report with nothing recorded would be misleading; the error alone is the answer.
+			if err != nil && opts.format == "text" && len(report.Discovery.Environments) == 0 && len(report.Discovery.Issues) == 0 && len(report.Observations) == 0 {
+				return err
+			}
+			return errors.Join(renderScan(cmd, opts, report), err)
+		},
+	}
+}
+
+// renderScan writes the directory scan. It returns only rendering errors; the
+// caller joins the domain error that ScanConda returned.
+func renderScan(cmd *cobra.Command, opts *commandOptions, report inventory.ScanReport) error {
+	if opts.format == "json" {
+		if err := encodeJSON(cmd.OutOrStdout(), report); err != nil {
+			return err
+		}
+	} else if err := renderScanText(cmd, report); err != nil {
+		return err
+	}
+	warnings := newPrinter(cmd.ErrOrStderr())
+	renderIssues(warnings, "", report.Discovery.Issues)
+	return warnings.Err()
+}
+
+func renderScanText(cmd *cobra.Command, report inventory.ScanReport) error {
+	out := newPrinter(cmd.OutOrStdout())
+	out.Printf("Scan evidence | %s\n\n", report.Started.Format(time.RFC3339))
+	failures := 0
+	for _, observation := range report.Observations {
+		env := observation.Environment
+		out.Printf("%s  (revision %s)\n  Prefix: %s\n  Duration: %s\n", lintText(env.Name), formatRevision(env.Revision), lintText(env.Path), observation.Duration.Round(time.Millisecond))
+		if observation.Error != "" {
+			failures++
+			out.Printf("  SBOM: not written (%s)\n\n", lintText(observation.Error))
 			continue
 		}
-		version := item.result.SyftVersion
-		if version == "" {
-			version = "unknown"
+		result := observation.Result
+		out.Printf("  Syft: %s; directory source; %d conda, %d installed Python metadata, %d other packages observed\n  SBOM: %s\n", syftVersion(result.SyftVersion), result.Conda, result.PythonInstalled, result.Other, lintText(result.Path))
+		if observation.Pixi != "" {
+			out.Printf("  %s\n", lintText(observation.Pixi))
 		}
-		if _, err := fmt.Fprintf(out, "  Syft: %s; directory source; %d conda, %d installed Python metadata, %d other packages observed\n  SBOM: %s\n", version, item.result.Conda, item.result.PythonInstalled, item.result.Other, item.result.Path); err != nil {
-			return err
-		}
-		if item.pixi != "" {
-			if _, err := fmt.Fprintf(out, "  %s\n", item.pixi); err != nil {
-				return err
-			}
-		}
-		if _, err := fmt.Fprintln(out); err != nil {
-			return err
-		}
+		out.Println()
 	}
-	if _, err := fmt.Fprintln(out, "Searched roots:"); err != nil {
-		return err
+	out.Println("Searched roots:")
+	for _, root := range report.Discovery.Roots {
+		out.Printf("  %s\n", lintText(root))
 	}
-	for _, root := range report.Roots {
-		if _, err := fmt.Fprintf(out, "  %s\n", root); err != nil {
-			return err
-		}
+	environments := len(report.Discovery.Environments)
+	out.Printf("Summary: %s; %d conda environments found, %d SBOMs written, %d failed scans, %d discovery issues\n", report.Status, environments, len(report.Observations)-failures, failures, len(report.Discovery.Issues))
+	out.Printf("Timing: discovery %s; total %s\n", report.DiscoveryDuration.Round(time.Millisecond), report.TotalDuration.Round(time.Millisecond))
+	out.Println("Coverage: conda prefixes within requested roots only; package counts are Syft observations, not verified totals.")
+	return out.Err()
+}
+
+func syftVersion(version string) string {
+	if version == "" {
+		return "unknown"
 	}
-	state := "complete"
-	if failures > 0 || len(report.Issues) > 0 {
-		state = "incomplete"
+	return version
+}
+
+// formatRevision returns the plain (uncolored) revision text.
+func formatRevision(revision *int) string {
+	if revision == nil {
+		return "?"
 	}
-	if _, err := fmt.Fprintf(out, "Summary: %s; %d conda environments found, %d SBOMs written, %d failed scans, %d discovery issues\n", state, len(report.Environments), len(report.Environments)-failures, failures, len(report.Issues)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(out, "Timing: discovery %s; total %s\n", discoveryDuration.Round(time.Millisecond), time.Since(started).Round(time.Millisecond)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(out, "Coverage: conda prefixes within requested roots only; package counts are Syft observations, not verified totals."); err != nil {
-		return err
-	}
-	for _, issue := range report.Issues {
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s: %s\n", issue.Path, issue.Error); err != nil {
-			return err
-		}
-	}
-	if failures > 0 || len(report.Issues) > 0 {
-		return fmt.Errorf("scan incomplete: %d failed target(s), %d discovery issue(s)", failures, len(report.Issues))
-	}
-	return nil
+	return strconv.Itoa(*revision)
 }

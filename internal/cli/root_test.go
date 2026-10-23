@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
-	"text/tabwriter"
+
+	"github.com/charmbracelet/x/ansi"
+	"github.com/fatih/color"
 )
 
 func TestCommands(t *testing.T) {
@@ -76,35 +79,60 @@ func TestFindReport(t *testing.T) {
 	}
 }
 
-func TestRevisionColor(t *testing.T) {
-	for _, tt := range []struct {
-		rev  int
-		want string
-	}{{0, "\x1b[32m"}, {1, "\x1b[33m"}, {3, "\x1b[38;5;208m"}, {6, "\x1b[31m"}} {
-		if got := revisionColor(tt.rev); got != tt.want {
-			t.Errorf("revisionColor(%d) = %q, want %q", tt.rev, got, tt.want)
-		}
+func TestRevisionCellIsPlainWithoutTerminal(t *testing.T) {
+	var output bytes.Buffer
+	rev := 0
+	if got := revisionCell(&rev, &output, false); got != "0" {
+		t.Fatalf("non-terminal revision = %q, want plain 0", got)
+	}
+	if got := revisionCell(nil, &output, false); got != "?" {
+		t.Fatalf("missing revision = %q, want ?", got)
 	}
 }
 
-func TestColoredRevisionTableCell(t *testing.T) {
-	var output bytes.Buffer
-	table := tabwriter.NewWriter(&output, 0, 4, 2, ' ', tabwriter.StripEscape)
-	rev := 0
-	if _, err := table.Write([]byte("example\t" + formatRevision(&rev, true) + "\t/path\n")); err != nil {
+// TestColoredTableMatchesPlainWidth renders the same table colored and plain and
+// requires identical visible output, so ANSI bytes never widen a column.
+func TestColoredTableMatchesPlainWidth(t *testing.T) {
+	render := func(revisions []int, colored bool) string {
+		var output bytes.Buffer
+		rows := [][]string{}
+		for _, rev := range revisions {
+			value := rev
+			var cell string
+			if colored {
+				c := color.New(revisionAttribute(value))
+				c.EnableColor()
+				cell = c.Sprint(strconv.Itoa(value))
+			} else {
+				cell = strconv.Itoa(value)
+			}
+			rows = append(rows, []string{"env", cell, "/path"})
+		}
+		if err := printRows(&output, []string{"NAME", "REV", "LOCATION"}, rows); err != nil {
+			t.Fatal(err)
+		}
+		return output.String()
+	}
+	revisions := []int{1, 1234}
+	colored := render(revisions, true)
+	if !strings.Contains(colored, "\x1b[") {
+		t.Fatalf("colored table has no SGR sequence: %q", colored)
+	}
+	if got, want := ansi.Strip(colored), render(revisions, false); got != want {
+		t.Fatalf("colored visible table differs from plain table:\ncolored %q\nplain   %q", got, want)
+	}
+}
+
+func TestTableUsesTerminalCellWidths(t *testing.T) {
+	var out bytes.Buffer
+	if err := printRows(&out, []string{"NAME", "REV"}, [][]string{{"\u754c", "1"}, {"e\u0301", "2"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := table.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(output.String(), "\xc3\xbf") || strings.Contains(output.String(), "\xff") {
-		t.Fatalf("table contains visible escape markers: %q", output.String())
-	}
-	if !strings.Contains(output.String(), "\x1b[32m0\x1b[0m") {
-		t.Fatalf("colored revision missing: %q", output.String())
-	}
-	if got := formatRevision(&rev, false); got != "0" {
-		t.Fatalf("uncolored revision = %q, want 0", got)
+	for _, line := range strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n") {
+		prefix := strings.TrimRightFunc(line, func(r rune) bool { return r != ' ' })
+		if width := ansi.StringWidth(prefix); width != 6 {
+			t.Fatalf("last table column starts after %d cells, want 6: %q", width, line)
+		}
 	}
 }
 
@@ -120,7 +148,7 @@ func TestFindJSON(t *testing.T) {
 	cmd := New()
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"find", "--json", root})
+	cmd.SetArgs([]string{"find", "--format", "json", root})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +192,7 @@ func TestFindKnownLocationsJSON(t *testing.T) {
 	cmd := New()
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"find", "--json"})
+	cmd.SetArgs([]string{"find", "--format", "json"})
 	// Other platform-default hints can be inaccessible on the test host; their
 	// coverage errors must not prevent a structured partial report.
 	_ = cmd.Execute()
