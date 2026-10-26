@@ -174,6 +174,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			}
 		}
 	}
+	caches := map[string]Target{}
 	for i := range snapshot.Targets {
 		target := &snapshot.Targets[i]
 		if cancelErr != nil || ctx.Err() != nil {
@@ -184,7 +185,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			}
 			continue
 		}
-		if err := collectHostFacts(ctx, target, req); err != nil {
+		if err := collectHostFacts(ctx, target, req, caches); err != nil {
 			cancelErr = errors.Join(cancelErr, err)
 		}
 	}

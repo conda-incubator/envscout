@@ -1,4 +1,4 @@
-Lint | profile local | ruleset 4
+Lint | profile local | ruleset 5
 Target: file:///golden/env (1 prefixes)
 ENV013 warning file:///golden/env
   Found: ca-certificates 2026.10.19 in `/golden/env`, recorded at `/golden/env/conda-meta/ca-certificates.json`, is below the defaults recommended minimum 2026.10.20 following the October 2026 eMudhra incident. Update this environment's CA package independently of base.

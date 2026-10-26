@@ -285,7 +285,7 @@ func TestHostCacheUsesOnlyRecordRootsAndCanonicalMarkers(t *testing.T) {
 		t.Fatalf("collection = %+v %v", snapshot, err)
 	}
 	target := snapshot.Targets[0]
-	if target.Coverage["host-cache"] != Complete || len(target.Archives) != 1 || len(target.Extracted) != 1 || target.Archives[0].Bytes != 7 || target.Extracted[0].Bytes <= 7 {
+	if target.Coverage["host-cache"] != Complete || len(target.Archives) != 1 || len(target.Extracted) != 1 || target.Archives[0].Bytes != 7 || target.Extracted[0].Bytes != 0 {
 		t.Fatalf("cache facts = %+v", target)
 	}
 }

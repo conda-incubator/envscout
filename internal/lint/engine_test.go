@@ -64,7 +64,7 @@ func TestReportAndPolicyVersions(t *testing.T) {
 	if report.SchemaVersion != SchemaVersion || report.RulesetVersion != RulesetVersion {
 		t.Fatalf("report versions = %d/%q, want %d/%q", report.SchemaVersion, report.RulesetVersion, SchemaVersion, RulesetVersion)
 	}
-	if SchemaVersion != 4 || ConfigVersion != 1 || RulesetVersion != "4" || ProfileVersion != "3" {
+	if SchemaVersion != 4 || ConfigVersion != 1 || RulesetVersion != "5" || ProfileVersion != "3" {
 		t.Fatal("wire version constants changed")
 	}
 }

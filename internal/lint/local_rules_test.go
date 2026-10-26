@@ -552,10 +552,10 @@ func TestHostCacheLogicalBytesAndBoundedPaths(t *testing.T) {
 		t.Fatalf("findings=%+v", findings)
 	}
 	f := findings[0]
-	if len(f.Evidence.Paths) != MaxSamples || len(f.Evidence.Samples) != MaxSamples || f.Evidence.Count != MaxSamples+4 || f.Evidence.PayloadBytes != int64((MaxSamples+3)*2+50) {
+	if len(f.Evidence.Paths) != MaxSamples || len(f.Evidence.Samples) != MaxSamples || f.Evidence.Count != MaxSamples+4 || f.Evidence.PayloadBytes != int64((MaxSamples+3)*2) {
 		t.Fatalf("unbounded or wrong accounting: %+v", f)
 	}
-	if !strings.Contains(f.Evidence.ByteUnit, "logical") || !strings.Contains(f.Evidence.ByteUnit, "not unique or reclaimable") {
+	if !strings.Contains(f.Evidence.ByteUnit, "extracted directory sizes are not measured") || !strings.Contains(f.Evidence.ByteUnit, "not unique or reclaimable") {
 		t.Fatalf("logical totals must not promise reclaimable bytes: %+v", f)
 	}
 	rule := mustRule(t, "ENV008")

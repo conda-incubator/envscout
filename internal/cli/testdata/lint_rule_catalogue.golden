@@ -77,8 +77,8 @@ ENV008  Host package cache content
   Docs:
     https://docs.conda.io/projects/conda/en/stable/commands/clean.html
   Exceptions:
-    Cache roots come from installed records, not complete conda configuration precedence; archive and extracted observations can represent the same package.
-    File payload totals are not unique disk blocks or reclaimable space; hardlinks, shared caches and symlinks require separate review. Do not use --force-pkgs-dirs for symlink-installed environments.
+    Cache roots come from installed records, not complete conda configuration precedence; shared roots are inspected once per run and archives and extracted entries can represent the same package.
+    Only archive file sizes are measured; extracted directories are identified by canonical markers without traversing their payload. Sizes are not unique disk blocks or reclaimable space. Do not use --force-pkgs-dirs for symlink-installed environments.
 
 ENV009  Python version is past upstream end-of-life
   Why: Upstream CPython no longer issues fixes for an end-of-life release series.

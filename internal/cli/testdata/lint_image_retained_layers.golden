@@ -1,4 +1,4 @@
-Lint | profile container-runtime | ruleset 4
+Lint | profile container-runtime | ruleset 5
 Target: oci-archive:golden-image (1 prefixes)
 IMG001 warning oci-archive:golden-image
   Found: 1 package archives remain in the image at `/opt/conda/pkgs/old-1.0-0.conda`. Cached downloads add content to the image after installation has finished.

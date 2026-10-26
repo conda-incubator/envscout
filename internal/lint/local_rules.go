@@ -545,6 +545,9 @@ func checkHostCache(target evidence.Target, opts RuleOptions, rule Rule) (Outcom
 		outcome.Status, outcome.Reason = Unknown, "host package-cache coverage is incomplete"
 	}
 	artifacts := append(slices.Clone(target.Archives), target.Extracted...)
+	for i := len(target.Archives); i < len(artifacts); i++ {
+		artifacts[i].Bytes = 0 // Extracted payloads are not traversed by host lint.
+	}
 	if len(artifacts) == 0 {
 		if len(target.Prefixes) == 0 && outcome.Status == Pass && completeOf(target, "prefixes") {
 			outcome.Status, outcome.Reason = NotApplicable, "no conda environment or record-derived cache was found"
@@ -552,8 +555,8 @@ func checkHostCache(target evidence.Target, opts RuleOptions, rule Rule) (Outcom
 		return outcome, nil
 	}
 	f := newFinding(target, rule, opts.Severity, nil, artifacts)
-	f.Evidence.ByteUnit = "logical archive and extracted-file payload bytes; not unique or reclaimable bytes"
-	f.Message = fmt.Sprintf("Host package-cache entries at %s include %d archive observations and %d extracted-entry observations, totaling %d file payload bytes. %s", quotedPaths(f.Evidence.Paths), len(target.Archives), len(target.Extracted), f.Evidence.PayloadBytes, rule.Description)
+	f.Evidence.ByteUnit = "archive file payload bytes; not unique or reclaimable; extracted directory sizes are not measured"
+	f.Message = fmt.Sprintf("Host package-cache entries at %s include %d archives (%d file payload bytes) and %d extracted package directories whose sizes were not measured. %s", quotedPaths(f.Evidence.Paths), len(target.Archives), f.Evidence.PayloadBytes, len(target.Extracted), rule.Description)
 	return outcome, []Finding{f}
 }
 

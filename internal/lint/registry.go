@@ -104,12 +104,12 @@ var registry = []Rule{
 		Defaults:   profileDefaults(localOnly, allWarning, nil), Check: checkMixedChannels,
 	},
 	{
-		ID: "ENV008", Version: "1", Name: "Host package cache content", Category: "footprint",
+		ID: "ENV008", Version: "2", Name: "Host package cache content", Category: "footprint",
 		Description: "Cached downloads and extracted packages consume space and can be shared by several environments.",
 		TargetKinds: []string{"dir"}, Capabilities: []string{"prefixes", "conda-records", "host-cache"}, Available: true,
 		Confidence: "high", Fix: "Review `conda clean --tarballs --dry-run` and `conda clean --packages --dry-run` before cleaning unused cache content; preserve caches required by symlink-installed environments.",
 		References: []string{condaCleanReference},
-		Exceptions: []string{"Cache roots come from installed records, not complete conda configuration precedence; archive and extracted observations can represent the same package.", "File payload totals are not unique disk blocks or reclaimable space; hardlinks, shared caches and symlinks require separate review. Do not use --force-pkgs-dirs for symlink-installed environments."},
+		Exceptions: []string{"Cache roots come from installed records, not complete conda configuration precedence; shared roots are inspected once per run and archives and extracted entries can represent the same package.", "Only archive file sizes are measured; extracted directories are identified by canonical markers without traversing their payload. Sizes are not unique disk blocks or reclaimable space. Do not use --force-pkgs-dirs for symlink-installed environments."},
 		Defaults:   profileDefaults(localOnly, nil, nil), Check: checkHostCache,
 	},
 	{

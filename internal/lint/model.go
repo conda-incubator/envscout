@@ -14,7 +14,7 @@ const (
 	// SchemaVersion is the JSON report contract; 4 adds per-instance next actions.
 	SchemaVersion = 4
 	// RulesetVersion changes when rule identities or predicates change.
-	RulesetVersion = "4"
+	RulesetVersion = "5"
 	// ProfileVersion is the version of the lint profile set.
 	ProfileVersion = "3"
 	MaxSamples     = 20
