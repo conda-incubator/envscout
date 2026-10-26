@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -133,11 +134,27 @@ func renderRules(out io.Writer, format string) error {
 	}
 	printer := newPrinter(out)
 	for _, rule := range policy.ListRules() {
-		suffix := ""
-		if !rule.Available {
-			suffix = fmt.Sprintf(" (unavailable: %s)", rule.UnavailableReason)
+		printer.Printf("%s  %s\n  Why: %s\n  Fix: %s\n", lintText(rule.ID), lintText(rule.Name), lintText(rule.Description), lintText(rule.Fix))
+		var enabled []string
+		for profile, defaults := range rule.Defaults {
+			if defaults.Enabled {
+				enabled = append(enabled, lintText(profile)+" ("+lintText(string(defaults.Severity))+")")
+			}
 		}
-		printer.Printf("%s  %s%s\n", rule.ID, lintText(rule.Name), lintText(suffix))
+		slices.Sort(enabled)
+		printer.Printf("  Enabled profiles: %s\n", strings.Join(enabled, ", "))
+		printer.Println("  Docs:")
+		for _, reference := range rule.References {
+			printer.Printf("    %s\n", lintText(reference))
+		}
+		printer.Println("  Exceptions:")
+		for _, exception := range rule.Exceptions {
+			printer.Printf("    %s\n", lintText(exception))
+		}
+		if !rule.Available {
+			printer.Printf("  Unavailable: %s\n", lintText(rule.UnavailableReason))
+		}
+		printer.Println()
 	}
 	return printer.Err()
 }
@@ -147,35 +164,50 @@ func renderLint(out io.Writer, report policy.Report, format string, noColor bool
 		return encodeJSON(out, report)
 	}
 	printer := newPrinter(out)
-	printer.Printf("Lint | profile %s | ruleset %s\n", report.Profile, report.RulesetVersion)
+	printer.Printf("Lint | profile %s | ruleset %s\n", lintText(report.Profile), lintText(report.RulesetVersion))
+	imageTargets := make(map[string]bool, len(report.Targets))
 	for _, target := range report.Targets {
-		printer.Printf("Target: %s (%d confirmed prefixes)\n", lintText(target.ID), target.PrefixCount)
+		imageTargets[target.ID] = target.Kind == "oci-archive"
+		printer.Printf("Target: %s (%d prefixes)\n", lintText(target.ID), target.PrefixCount)
 		for _, root := range target.Roots {
 			printer.Printf("  Scope root: %s\n", lintText(root))
 		}
 	}
+	findings, suppressed := 0, 0
 	for _, finding := range report.Findings {
 		if finding.Suppression != nil {
+			suppressed++
 			continue
 		}
 		rule, ok := policy.LookupRule(finding.RuleID)
 		if !ok {
-			return fmt.Errorf("render lint finding %q: rule metadata unavailable", finding.RuleID)
+			return errors.Join(printer.Err(), fmt.Errorf("render lint finding %q: rule metadata unavailable", finding.RuleID))
 		}
-		severity := colour(out, noColor, string(finding.Severity), severityAttribute(finding.Severity))
-		printer.Printf("%s %s %s\n  %s\n  Next: %s\n", finding.RuleID, severity, lintText(finding.Target), lintText(finding.Message), lintText(rule.Fix))
-		renderEvidence(printer, finding.Evidence)
+		findings++
+		severity := colour(out, noColor, lintText(string(finding.Severity)), severityAttribute(finding.Severity))
+		printer.Printf("%s %s %s\n  Found: %s\n", lintText(finding.RuleID), severity, lintText(finding.Target), lintText(finding.Message))
+		renderEvidence(printer, finding.Evidence, imageTargets[finding.Target])
+		for _, note := range finding.Evidence.Notes {
+			printer.Printf("  Note: %s\n", lintText(note))
+		}
+		next := finding.Next
+		if next == "" {
+			next = rule.Fix
+		}
+		printer.Printf("  Next: %s\n", lintText(next))
 	}
 	renderOutcomes(printer, report)
-	counts := report.OutcomeCounts
-	printer.Printf("Summary: %s; %d targets; pass %d, findings %d, unknown %d, not applicable %d, disabled %d, suppressed %d\n", report.Status, len(report.Targets), counts[policy.Pass], counts[policy.FindingStatus], counts[policy.Unknown], counts[policy.NotApplicable], counts[policy.Disabled], counts[policy.Suppressed])
+	printer.Printf("Summary: %s; %d targets; %d findings; %d unknown", lintText(report.Status), len(report.Targets), findings, report.OutcomeCounts[policy.Unknown])
+	if suppressed > 0 {
+		printer.Printf("; %d suppressed", suppressed)
+	}
+	printer.Println()
 	for _, issue := range report.Issues {
 		printer.Printf("Inspection issue: %s: %s\n", lintText(issue.Path), lintText(issue.Message))
 	}
 	for _, note := range report.SuppressionNotes {
-		printer.Printf("Suppression: %s %s: %s\n", lintText(note.Rule), note.Status, lintText(note.Reason))
+		printer.Printf("Suppression: %s %s: %s\n", lintText(note.Rule), lintText(note.Status), lintText(note.Reason))
 	}
-	printer.Println("Coverage: selected rules and stated scopes only; this is not a vulnerability assessment.")
 	return printer.Err()
 }
 
@@ -190,29 +222,59 @@ func severityAttribute(severity policy.Severity) color.Attribute {
 	}
 }
 
-func renderEvidence(printer *printer, ev policy.FindingEvidence) {
+func renderEvidence(printer *printer, ev policy.FindingEvidence, image bool) {
+	seen := make(map[string]bool, len(ev.Samples))
 	for _, item := range ev.Samples {
-		printer.Printf("  Evidence: %s", lintText(item.Path))
+		path := lintPath(item.Path, image)
+		seen[path] = true
+		printer.Printf("  Evidence: %s", path)
 		if item.Bytes > 0 {
-			printer.Printf(" (%d logical payload bytes)", item.Bytes)
+			printer.Printf(" (%s)", lintBytes(item.Bytes))
 		}
 		if item.BlobDigest != "" {
-			printer.Printf(" layer %d %s (%d compressed layer bytes, not per-file savings)", item.Layer, item.BlobDigest, item.LayerBytes)
+			printer.Printf("; source layer %d %s (%s compressed layer)", item.Layer+1, lintText(item.BlobDigest), lintBytes(item.LayerBytes))
 		}
 		printer.Println()
 	}
-	if len(ev.Samples) > 0 {
-		return
+	for _, path := range ev.Paths {
+		path = lintPath(path, image)
+		if !seen[path] {
+			printer.Printf("  Evidence: %s\n", path)
+			seen[path] = true
+		}
 	}
-	for _, location := range ev.Locations {
-		printer.Printf("  Evidence: %s\n", lintText(location))
+	if len(seen) == 0 {
+		for _, location := range ev.Locations {
+			printer.Printf("  Evidence: %s\n", lintText(location))
+		}
 	}
+}
+
+func lintPath(path string, image bool) string {
+	if image && !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return lintText(path)
+}
+
+func lintBytes(bytes int64) string {
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+	size := float64(bytes)
+	unit := 0
+	for size >= 1024 && unit < len(units)-1 {
+		size /= 1024
+		unit++
+	}
+	if unit == 0 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	return fmt.Sprintf("%.1f %s", size, units[unit])
 }
 
 func renderOutcomes(printer *printer, report policy.Report) {
 	for _, outcome := range report.Outcomes {
 		if outcome.Status == policy.Unknown {
-			printer.Printf("Check %s %s: %s\n", outcome.RuleID, outcome.Status, lintText(outcome.Reason))
+			printer.Printf("Check %s %s: %s\n", lintText(outcome.RuleID), lintText(string(outcome.Status)), lintText(outcome.Reason))
 		}
 	}
 }

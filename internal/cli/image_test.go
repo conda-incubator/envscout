@@ -16,9 +16,9 @@ import (
 func TestImageFindAndScan(t *testing.T) {
 	archive := testimage.Archive(t,
 		[]testimage.Entry{
-			{Name: "opt/conda/conda-meta/python.json", Data: `{"name":"python","version":"3.12","build":"0","subdir":"linux-64"}`},
+			{Name: "opt/conda/conda-meta/python.json", Data: canonicalPrefixRecord("python", "3.12", "0")},
 			{Name: "opt/conda/conda-meta/history", Data: "==> 2026-01-01 00:00:00 <==\n==> 2026-01-02 00:00:00 <==\n"},
-			{Name: "opt/conda/envs/app/conda-meta/demo.json", Data: `{"name":"demo","version":"1.0","build":"0","subdir":"linux-64"}`},
+			{Name: "opt/conda/envs/app/conda-meta/demo.json", Data: canonicalPrefixRecord("demo", "1.0", "0")},
 			{Name: "removed/conda-meta/old.json", Data: `{"name":"hidden","version":"1"}`},
 		},
 		[]testimage.Entry{{Name: ".wh.removed"}},
@@ -101,7 +101,7 @@ func TestImageArgumentValidation(t *testing.T) {
 
 func TestImagePartialDiscoveryStillWritesSBOM(t *testing.T) {
 	archive := testimage.Archive(t, []testimage.Entry{
-		{Name: "env/conda-meta/demo.json", Data: `{"name":"demo","version":"1"}`},
+		{Name: "env/conda-meta/demo.json", Data: canonicalPrefixRecord("demo", "1", "0")},
 		{Name: "broken/conda-meta/bad.json", Data: `{"name":"incomplete"}`},
 		{Name: "alias", Type: tar.TypeSymlink, Link: "env"},
 	})

@@ -1,11 +1,11 @@
-Lint | profile container-distroless | ruleset 2
-Target: oci-archive:golden-image (1 confirmed prefixes)
-Check IC001 unknown: required final-cache coverage is not complete; absence was not established
-Check IC002 unknown: required final-cache coverage is not complete; absence was not established
-Check IC003 unknown: prefix roles or runtime configuration could not be completely inspected
-Check IC004 unknown: required layer-retention coverage is not complete; absence was not established
-Check IC006 unknown: required os-package-tools coverage is not complete; absence was not established
-Summary: incomplete; 1 targets; pass 0, findings 0, unknown 5, not applicable 0, disabled 4, suppressed 1
+Lint | profile container-distroless | ruleset 5
+Target: oci-archive:golden-image (1 prefixes)
+Check IMG001 unknown: required final-cache coverage is not complete; absence was not established
+Check IMG002 unknown: required final-cache coverage is not complete; absence was not established
+Check IMG003 unknown: prefix roles or runtime configuration could not be completely inspected
+Check IMG004 unknown: required layer-retention coverage is not complete; absence was not established
+Check IMG005 unknown: required os-package-tools coverage is not complete; absence was not established
+Summary: incomplete; 1 targets; 0 findings; 5 unknown; 1 suppressed
 Inspection issue: oci-archive:golden-image: required evidence coverage is not complete
 Inspection issue: oci-archive:golden-image: required evidence coverage is not complete
 Inspection issue: oci-archive:golden-image: required evidence coverage is not complete
@@ -13,5 +13,4 @@ Inspection issue: oci-archive:golden-image: required evidence coverage is not co
 Inspection issue: : strict distroless policy rejects expired or unused suppressions
 Inspection issue: oci-archive:golden-image: required evidence coverage is not complete
 Inspection issue: oci-archive:golden-image: required evidence coverage is not complete
-Suppression: IC006 unused: suppression did not match an observed finding
-Coverage: selected rules and stated scopes only; this is not a vulnerability assessment.
+Suppression: IMG005 unused: suppression did not match an observed finding

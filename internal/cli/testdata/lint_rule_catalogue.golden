@@ -1,0 +1,203 @@
+ENV001  Many conda transactions
+  Why: Repeated environment changes make the original dependency choices harder to review and reproduce.
+  Fix: Export the prefix with `conda env export --prefix PATH --from-history`, review the requested dependencies, and create a fresh environment from that specification.
+  Enabled profiles: container-development (info), local (info)
+  Docs:
+    https://docs.conda.io/projects/conda/en/stable/user-guide/tasks/manage-environments.html
+  Exceptions:
+    The revision threshold uses conda's zero-based last transaction index; the displayed transaction count is revision + 1.
+    History does not prove drift or cover pip installs or file edits. A from-history export is not a resolved lock.
+
+ENV002  Project has no lockfile
+  Why: A resolved lock records dependency choices that a manifest alone leaves open.
+  Fix: In the associated project, run `pixi lock`, `conda-lock lock`, or the locking command for its package manager.
+  Enabled profiles: local (info)
+  Docs:
+    https://pixi.sh/latest/workspace/lockfile/
+    https://conda.github.io/conda-lock/
+  Exceptions:
+    Only the explicitly associated project root is checked for recognized lockfiles.
+    Presence does not establish installation synchronization; unsupported lock formats receive a presence check only.
+
+ENV003  Python packages installed outside conda
+  Why: Packages outside conda's file ownership are not managed by conda's dependency solver.
+  Fix: Record intentional pip dependencies in the project specification; install conda dependencies first and pip dependencies last when recreating the environment.
+  Enabled profiles: local (info)
+  Docs:
+    https://docs.conda.io/projects/conda/en/stable/user-guide/tasks/manage-environments.html#using-pip-in-an-environment
+  Exceptions:
+    Unowned distribution metadata does not identify the installer; manual and editable installs are possible.
+    Incomplete conda ownership metadata cannot establish that a distribution is unowned.
+
+ENV004  Python package conflicts with conda metadata
+  Why: Different versions of one distribution can leave conda's recorded state inconsistent with Python package metadata.
+  Fix: Recreate the environment with one owner for the conflicting package; avoid installing a different pip version over a conda-managed distribution.
+  Enabled profiles: local (info)
+  Docs:
+    https://docs.conda.io/projects/conda/en/stable/user-guide/tasks/manage-environments.html#using-pip-in-an-environment
+  Exceptions:
+    A metadata version conflict does not prove Python import precedence or identify the installer; Python versions use PEP 440 equivalence.
+    Conda package names and PyPI distribution names are not universally interchangeable; bundles can use different package and distribution version conventions.
+
+ENV005  Extra packages in the tooling environment
+  Why: Application dependencies in the installer environment couple its maintenance to project dependencies.
+  Fix: Create a separate project environment with `conda create --name PROJECT PACKAGE...` and keep the installer environment focused on its tooling.
+  Enabled profiles: local (info)
+  Docs:
+    https://docs.conda.io/projects/conda/en/stable/user-guide/tasks/manage-environments.html
+  Exceptions:
+    A conda/mamba-containing prefix is a tooling candidate, not proof of the installation's base prefix or application use.
+    Packages outside the tools' declared dependency closure may be intentional tooling extensions.
+
+ENV006  Duplicate conda package sets
+  Why: Repeated conda package sets may duplicate environment maintenance and disk usage.
+  Fix: Review the listed prefixes and remove an unused one with `conda env remove --prefix PATH` only after checking its project references.
+  Enabled profiles: local (info)
+  Docs:
+    https://docs.conda.io/projects/conda/en/stable/user-guide/tasks/manage-environments.html#removing-an-environment
+  Exceptions:
+    Only prefixes in the requested discovery scope are compared.
+    Matching conda identities do not establish matching pip packages, files, configuration or runtime behavior, or predict disk savings.
+
+ENV007  Defaults and conda-forge mixed
+  Why: Mixing defaults and conda-forge can combine packages built against different dependency assumptions.
+  Fix: Choose one channel family, set strict channel priority, and recreate the environment; for conda-forge use `conda create --override-channels -c conda-forge --strict-channel-priority --name PROJECT PACKAGE...`.
+  Enabled profiles: local (warning)
+  Docs:
+    https://conda-forge.org/docs/user/tipsandtricks/
+    https://docs.conda.io/projects/conda/en/stable/user-guide/tasks/manage-channels.html
+  Exceptions:
+    Intentional mixtures are possible; this check does not prove an ABI failure.
+    Only canonical official channel identities are classified; custom aliases and defaults multichannel expansion are unsupported.
+
+ENV008  Host package cache content
+  Why: Cached downloads and extracted packages consume space and can be shared by several environments.
+  Fix: Review `conda clean --tarballs --dry-run` and `conda clean --packages --dry-run` before cleaning unused cache content; preserve caches required by symlink-installed environments.
+  Enabled profiles: local (info)
+  Docs:
+    https://docs.conda.io/projects/conda/en/stable/commands/clean.html
+  Exceptions:
+    Cache roots come from installed records, not complete conda configuration precedence; shared roots are inspected once per run and archives and extracted entries can represent the same package.
+    Only archive file sizes are measured; extracted directories are identified by canonical markers without traversing their payload. Sizes are not unique disk blocks or reclaimable space. Do not use --force-pkgs-dirs for symlink-installed environments.
+
+ENV009  Python version is past upstream end-of-life
+  Why: Upstream CPython no longer issues fixes for an end-of-life release series.
+  Fix: Create and test a replacement environment with a supported Python release, for example `conda create --name PROJECT python=3.13 PACKAGE...`.
+  Enabled profiles: local (warning)
+  Docs:
+    https://devguide.python.org/versions/
+  Exceptions:
+    The upstream CPython support table is dated 2026-10-26 and evaluated against the report's evaluation date.
+    Vendor-maintained interpreters may have a different support policy; EOL is not a vulnerability finding.
+
+ENV010  Installed conda metadata differs from pixi.lock
+  Why: Installed conda package metadata differs from the Pixi lock selection used for this prefix.
+  Fix: Run `pixi install --environment ENVIRONMENT` in the project that owns the prefix, then repeat this check.
+  Enabled profiles: local (warning)
+  Docs:
+    https://pixi.sh/latest/workspace/lockfile/
+  Exceptions:
+    The Pixi marker supplies the environment and platform; missing selection or incomplete records cannot establish missing packages.
+    Only conda metadata identities and available artifact hashes are compared, not PyPI, installed files, Pixi's installed-lock hash or the manifest.
+
+ENV011  pixi.lock is stale against its manifest
+  Why: A stale manifest/lock selection can omit requested dependency or platform changes.
+  Fix: Run `pixi lock` in the project to refresh its resolved dependency selections.
+  Enabled profiles: local (warning)
+  Docs:
+    https://pixi.sh/latest/workspace/lockfile/
+  Exceptions:
+    Timestamps, package counts and satisfying individual conda specs do not establish manifest/lock freshness.
+  Unavailable: go-rattler does not provide authoritative Pixi manifest/lock synchronization; MatchSpec matching covers only part of that contract.
+
+ENV012  Requested packages have no version constraint
+  Why: An unconstrained request can select a different version when the environment is recreated.
+  Fix: Add suitable version constraints to the project specification and resolve a lock with `pixi lock` or `conda-lock lock`.
+  Enabled profiles: local (info)
+  Docs:
+    https://docs.conda.io/projects/conda/en/stable/user-guide/concepts/pkg-specs.html
+  Exceptions:
+    Missing requested-spec metadata is not an unconstrained request.
+    A version range is a constraint even when it is not an exact version/build pin; this check does not prove installed drift.
+    If a record has several requested specs, any unconstrained request is reported; this check does not test whether the installed version satisfies them.
+
+ENV013  CA packages below eMudhra remediation minimum
+  Why: Applications using an environment's CA packages need the distribution's recommended updates following the October 2026 eMudhra intermediate-certificate compromise.
+  Fix: Update certifi to >=2026.10.19 and ca-certificates to >=2026.10.19 on conda-forge or >=2026.10.20 on Anaconda main, in each affected prefix; update image builds and project locks as appropriate. Keep certificate verification enabled.
+  Enabled profiles: container (warning), container-development (warning), container-distroless (warning), container-runtime (warning), local (warning)
+  Docs:
+    https://conda.org/blog/2026-10-21-emudhra-security-updates/
+    https://github.com/conda-forge/conda-forge.github.io/issues/2967
+    https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2
+  Exceptions:
+    Minimums were verified on 2026-10-26 for the official conda-forge and Anaconda main channels; custom or missing channel identities are unknown.
+    certifi 2026.10.18 already fixes the incident but falls below the distributions' recommended minimum; older metadata is not proof that an affected certificate remains or is trusted.
+    Only conda package metadata is checked, not pip distributions, vendored copies, PEM contents, custom CA files or the operating system trust store.
+    Python/package pins or retired platforms may prevent updates; use a supported environment or distribution rather than disabling TLS verification.
+
+IMG001  Package archives shipped in image
+  Why: Cached downloads add content to the image after installation has finished.
+  Fix: Add `conda clean --tarballs -y` to the same `RUN` step that installs packages, or keep downloads in a BuildKit cache mount.
+  Enabled profiles: container (info), container-development (info), container-distroless (warning), container-runtime (warning)
+  Docs:
+    https://docs.conda.io/projects/conda/en/stable/commands/clean.html
+    https://docs.docker.com/build/cache/optimize/
+  Exceptions:
+    Only canonical package archive filenames inside observed package caches count; archive bytes are not format-verified.
+    Runtime package installation may intentionally use archives. File payload bytes are not predicted image-size savings.
+
+IMG002  Extracted package cache shipped in image
+  Why: Extracted caches can leave installation content in the image that its application does not need.
+  Fix: Review `conda clean --packages --dry-run` during installation, or copy a tested application prefix into a compatible runtime stage. Preserve observed cache dependencies.
+  Enabled profiles: container (info), container-development (info), container-distroless (warning), container-runtime (warning)
+  Docs:
+    https://docs.conda.io/projects/conda/en/stable/commands/clean.html
+    https://docs.docker.com/build/building/multi-stage/
+  Exceptions:
+    Symlinks can require cache paths; unlinking one ordinary hardlink does not erase another hardlink's content.
+    Image hardlink identity can be unresolved. File payload totals are not unique or reclaimable bytes, and --packages removes only unused cache entries.
+
+IMG003  Installer shipped alongside application environment
+  Why: A separate installer prefix can add build tooling to an image whose application uses another prefix.
+  Fix: Copy the tested application prefix into a compatible runtime stage and validate startup, activation, runtime libraries and relocation.
+  Enabled profiles: container (info), container-development (info), container-distroless (info), container-runtime (info)
+  Docs:
+    https://docs.docker.com/build/building/multi-stage/
+  Exceptions:
+    Application-in-base images are valid; direct startup using tooling or its prefix passes this check.
+    Nested envs/ paths identify application candidates, not exclusive runtime use. Shell wrappers are not interpreted.
+
+IMG004  Cache hidden by later layers still ships
+  Why: Deleting or replacing files in a later layer does not remove their earlier layer content from the image.
+  Fix: Install and clean caches in the same `RUN` step, use `RUN --mount=type=cache` for downloads, or copy the tested prefix into a runtime stage.
+  Enabled profiles: container-distroless (warning), container-runtime (warning)
+  Docs:
+    https://docs.docker.com/build/building/multi-stage/
+    https://docs.docker.com/build/cache/optimize/
+  Exceptions:
+    Compressed descriptor bytes describe whole layers, never per-file reclaimable savings; displayed source layers are numbered from one.
+    Collection does not identify deletion layers or Dockerfile instructions. Surviving cache hardlinks must not be classified as runtime-unused content.
+
+IMG005  Package manager executables shipped in image
+  Why: Package-manager executables add installation tooling and attack surface to an application image.
+  Fix: Install dependencies in a builder stage and copy tested runtime contents into a compatible final image; preserve package databases, metadata and required libraries.
+  Enabled profiles: container (info), container-development (info), container-distroless (error), container-runtime (warning)
+  Docs:
+    https://docs.docker.com/build/building/multi-stage/
+    https://github.com/GoogleContainerTools/distroless
+    https://github.com/GoogleContainerTools/distroless/blob/main/PACKAGE_METADATA.md
+  Exceptions:
+    Package databases, metadata, libraries, documentation and matching basenames alone are not command tooling.
+    Only recognized command locations are inspected; executable presence does not prove installation will succeed.
+    Intentional package-management and development workloads may retain these tools.
+
+IMG006  Shell present under shell-free image policy
+  Why: A shell conflicts with the shell-free policy selected by the distroless profile or this explicit rule.
+  Fix: Use exec-form `CMD` with a shell-free compatible base. For intentional shells, select `--profile container-runtime` and remove any explicit IMG006 enablement, or record a reviewed suppression.
+  Enabled profiles: container-distroless (error)
+  Docs:
+    https://github.com/GoogleContainerTools/distroless
+  Exceptions:
+    Intentional debug images and shell-dependent startup require an explicit reviewed exception.
+    Recognized command locations do not establish absence at custom installation paths.
+

@@ -11,14 +11,12 @@ import (
 const (
 	// ConfigVersion is the version of the --config policy file format; unchanged since 1.
 	ConfigVersion = 1
-	// SchemaVersion is the version of the JSON lint report. 3 removed derived
-	// per-finding metadata and duplicate outcome fingerprint lists in favor of
-	// rule metadata and findings keyed by target/rule, and compacted outcomes.
-	SchemaVersion = 3
-	// RulesetVersion is the version of the rule set; 2 removed IC005.
-	RulesetVersion = "2"
+	// SchemaVersion is the JSON report contract; 4 adds per-instance next actions.
+	SchemaVersion = 4
+	// RulesetVersion changes when rule identities or predicates change.
+	RulesetVersion = "5"
 	// ProfileVersion is the version of the lint profile set.
-	ProfileVersion = "1"
+	ProfileVersion = "3"
 	MaxSamples     = 20
 	MaxFindings    = 5000
 )
@@ -104,9 +102,13 @@ type Rule struct {
 	SupportsRevisionThreshold bool `json:"-"`
 	// Check returns the rule's observation; the engine supplies target/ID/status.
 	Check func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding) `json:"-"`
+	// prepare optionally shares immutable per-evaluation facts across target checks.
+	prepare func([]evidence.Prefix) func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding)
 }
 
 type Outcome struct {
+	// limited tells the engine to retain positives but mark evaluation incomplete.
+	limited      bool
 	RuleID       string `json:"rule_id"`
 	Target       string `json:"target"`
 	Status       Status `json:"status"`
@@ -138,10 +140,12 @@ type FindingEvidence struct {
 // Finding carries only per-instance data. Rule metadata (version, confidence,
 // category, references, recommendation) is available via LookupRule(RuleID).
 type Finding struct {
-	RuleID      string          `json:"rule_id"`
-	Target      string          `json:"target"`
-	Severity    Severity        `json:"severity"`
-	Message     string          `json:"message"`
+	RuleID   string   `json:"rule_id"`
+	Target   string   `json:"target"`
+	Severity Severity `json:"severity"`
+	Message  string   `json:"message"`
+	// Next overrides the catalogue's generic fix when an instance can name its command.
+	Next        string          `json:"next,omitempty"`
 	Evidence    FindingEvidence `json:"evidence"`
 	Fingerprint string          `json:"fingerprint"`
 	Suppression *Suppression    `json:"suppression,omitempty"`
@@ -179,6 +183,7 @@ type Report struct {
 	RuntimePrefix    string            `json:"runtime_prefix,omitempty"`
 	Project          string            `json:"project,omitempty"`
 	StartedAt        time.Time         `json:"started_at"`
+	EvaluatedAt      time.Time         `json:"evaluated_at"`
 	ConfigDigest     string            `json:"config_digest"`
 	Policy           Policy            `json:"policy"`
 	Targets          []TargetReport    `json:"targets"`

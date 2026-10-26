@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/conda-incubator/envscout/internal/imageinput"
+	"github.com/conda-incubator/envscout/internal/inventory"
+	gorattler "github.com/conda-incubator/go-rattler"
 )
 
 const (
@@ -35,17 +37,40 @@ type Prefix struct {
 	Path     string `json:"path"`
 	Revision *int   `json:"revision"`
 	Tooling  bool   `json:"tooling"`
+	// Records retain canonical metadata and its source path, never inferred packages.
+	Records        []inventory.CondaRecord `json:"-"`
+	RecordCoverage string                  `json:"record_coverage,omitempty"`
+}
+
+// PythonDistribution is an installed Python distribution cataloged by Syft.
+// OwnedBy names the conda record owning its distribution metadata, when present.
+type PythonDistribution struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Path    string `json:"path"`
+	OwnedBy string `json:"owned_by,omitempty"`
+}
+
+// LockComparison compares installed conda metadata only, not files or manifests.
+type LockComparison struct {
+	Path        string                `json:"path"`
+	Prefix      string                `json:"prefix"`
+	Environment string                `json:"environment"`
+	Subdir      string                `json:"subdir"`
+	Report      *gorattler.SyncReport `json:"report,omitempty"`
+	Reason      string                `json:"reason,omitempty"`
 }
 
 type Project struct {
-	Path         string `json:"path"`
-	Associated   bool   `json:"associated"`
-	LockPath     string `json:"lock_path,omitempty"`
-	LockVerified bool   `json:"lock_verified"`
-	Reason       string `json:"reason,omitempty"`
+	Path       string `json:"path"`
+	Associated bool   `json:"associated"`
+	LockPath   string `json:"lock_path,omitempty"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 type Target struct {
+	// AsOf is the evaluation clock supplied by the rule engine for dated policies.
+	AsOf               time.Time            `json:"-"`
 	ID                 string               `json:"id"`
 	Kind               string               `json:"kind"` // dir or oci-archive
 	Input              string               `json:"input"`
@@ -61,8 +86,12 @@ type Target struct {
 	RuntimeUsesTooling bool                 `json:"runtime_uses_tooling"`
 	CacheLinked        bool                 `json:"cache_linked"`
 	Project            *Project             `json:"project,omitempty"`
-	Coverage           map[string]string    `json:"coverage"`
-	Issues             []Issue              `json:"issues"`
+	Python             []PythonDistribution `json:"python_distributions,omitempty"`
+	Lock               *LockComparison      `json:"lock_comparison,omitempty"`
+	// Peers are supplied by Evaluate for cross-environment checks, not serialized.
+	Peers    []Prefix          `json:"-"`
+	Coverage map[string]string `json:"coverage"`
+	Issues   []Issue           `json:"issues"`
 }
 
 type Snapshot struct {

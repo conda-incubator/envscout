@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -41,7 +43,13 @@ func checkRevision(target evidence.Target, opts RuleOptions, rule Rule) (Outcome
 		revision := *prefix.Revision
 		f.Evidence.Revision, f.Evidence.RevisionThreshold = &revision, &threshold
 		f.Evidence.Count = 1
-		f.Message = fmt.Sprintf("Conda history revision %d meets the configured review threshold %d.", revision, threshold)
+		f.Message = fmt.Sprintf("%s has %d recorded conda transactions (revision %d; review threshold %d). Repeated changes make the original dependency choices harder to review.", quotedPaths([]string{prefix.Path}), uint64(revision)+1, revision, threshold)
+		if runtime.GOOS != "windows" {
+			f.Next = fmt.Sprintf("In a POSIX shell, export with `conda env export --prefix %s --from-history`, review the requested dependencies, and recreate in a new prefix.", commandArg(prefix.Path))
+		}
+		if target.Kind == "oci-archive" {
+			f.Next = "In the matching image or its build environment, " + rule.Fix
+		}
 		findings = append(findings, f)
 	}
 	if len(prefixes) == 0 && completeOf(target, "prefixes") {
@@ -60,19 +68,18 @@ func checkProjectLock(target evidence.Target, opts RuleOptions, rule Rule) (Outc
 	project := target.Project
 	switch {
 	case project == nil || !project.Associated:
-		outcome.Status, outcome.Reason = Unknown, "no verified explicit project association; nearby lockfiles are not mapped to this environment"
+		outcome.Status, outcome.Reason = NotApplicable, "no explicit --project association"
 	case !completeOf(target, "project-association"):
 		outcome.Status, outcome.Reason = Unknown, "associated project scope was not completely inspected"
-	case project.LockVerified:
-		outcome.Reason = "associated project has a verified resolved lock"
 	case project.LockPath != "":
-		outcome.Status, outcome.Reason = Unknown, "associated project has a lock whose resolution could not be verified"
+		outcome.Reason = "recognized lockfile is present; installation synchronization is outside this check"
 	default:
 		f := newFinding(target, rule, opts.Severity, []string{project.Path}, nil)
 		copied := *project
 		f.Evidence.Project = &copied
 		f.Evidence.Count = 1
-		f.Message = "The explicitly associated local project has no verified resolved lock in its inspected project scope."
+		f.Message = fmt.Sprintf("No pixi.lock, conda-lock.yml, conda-lock.yaml, uv.lock, poetry.lock or Pipfile.lock was found in project root %s. A resolved lock records dependency choices that a manifest alone leaves open.", quotedPaths([]string{project.Path}))
+		f.Next = fmt.Sprintf("In %s, run `pixi lock`, `conda-lock lock`, or the locking command for the project's package manager.", quotedPaths([]string{project.Path}))
 		findings = append(findings, f)
 	}
 	return outcome, findings
@@ -112,7 +119,7 @@ func artifactCheck(spec artifactRule) func(evidence.Target, RuleOptions, Rule) (
 		if spec.byteUnit != "" {
 			f.Evidence.ByteUnit = spec.byteUnit
 		}
-		f.Message = fmt.Sprintf(spec.message, f.Evidence.Count)
+		f.Message = fmt.Sprintf(spec.message, f.Evidence.Count) + " at " + quotedPaths(f.Evidence.Paths) + ". " + rule.Description
 		if spec.notes != nil {
 			f.Evidence.Notes = slices.Clone(spec.notes)
 		}
@@ -139,14 +146,14 @@ func checkExtractedCache(target evidence.Target, opts RuleOptions, rule Rule) (O
 	if f.Evidence.LinkCoverage == "" {
 		f.Evidence.LinkCoverage = evidence.NotCollected
 	}
-	f.Message = fmt.Sprintf("%d extracted package-cache entries remain in the final image.", f.Evidence.Count)
+	f.Message = fmt.Sprintf("%d extracted package-cache entries remain at %s. Installation content can add files the application does not need.", f.Evidence.Count, quotedPaths(f.Evidence.Paths))
 	switch {
 	case target.CacheLinked:
-		f.Evidence.Notes = []string{"Surviving runtime references to cache content were observed; cleanup is unsafe without preserving those dependencies."}
+		f.Evidence.Notes = []string{"Runtime references to cache content were observed. Preserve those dependencies before removing cache paths."}
 	case !completeOf(target, "cache-link-dependencies"):
-		f.Evidence.Notes = []string{"Required cache linkage inspection is incomplete; cleanup safety is unknown."}
+		f.Evidence.Notes = []string{"Cache linkage inspection is incomplete. Do not assume these paths are safe to remove."}
 	default:
-		f.Evidence.Notes = []string{"Linkage checks completed without an observed runtime cache dependency; runtime behavior still requires testing."}
+		f.Evidence.Notes = []string{"No runtime cache reference was observed. Review unused entries with the package manager and test the resulting image."}
 	}
 	return outcome, []Finding{f}
 }
@@ -155,6 +162,13 @@ func checkPrefixRoles(target evidence.Target, opts RuleOptions, rule Rule) (Outc
 	outcome := Outcome{Status: Pass}
 	outcome.SubjectCount = 1
 	tooling, apps := prefixRoles(target)
+	if target.RuntimeUsesTooling || slices.Contains(tooling, target.RuntimePrefix) {
+		outcome.Reason = "configured startup uses the tooling prefix"
+		if !completeOf(target, "prefixes") || !completeOf(target, "tooling-prefix") || !completeOf(target, "runtime-config") {
+			outcome.Status, outcome.Reason = Unknown, "prefix roles or runtime configuration inspection is incomplete"
+		}
+		return outcome, nil
+	}
 	if len(tooling) == 0 || len(apps) == 0 {
 		if !completeOf(target, "prefixes") || !completeOf(target, "tooling-prefix") || !completeOf(target, "runtime-config") {
 			outcome.Status, outcome.Reason = Unknown, "prefix roles or runtime configuration could not be completely inspected"
@@ -168,16 +182,32 @@ func checkPrefixRoles(target evidence.Target, opts RuleOptions, rule Rule) (Outc
 	f.Evidence.RuntimePrefix = target.RuntimePrefix
 	f.Evidence.RuntimeUsesTooling = target.RuntimeUsesTooling
 	f.Evidence.Count = len(tooling) + len(apps)
-	f.Message = "Confirmed tooling prefixes coexist with distinct application-prefix candidates."
-	switch {
-	case target.RuntimeUsesTooling:
-		f.Evidence.Notes = []string{"Configured startup uses tooling; this evidence does not justify removing the tooling prefix."}
-	case target.RuntimePrefix == "":
-		f.Evidence.Notes = []string{"Application role is a recognized nested-layout candidate; runtime attribution is not verified."}
+	f.Message = fmt.Sprintf("Installer prefixes %s coexist with application-prefix candidates %s. A separate installer can add build tooling to the application image.", quotedPaths(tooling), quotedPaths(apps))
+	switch target.RuntimePrefix {
+	case "":
+		f.Evidence.Notes = []string{"The application candidate comes from its nested envs/ path. Startup may use a wrapper; verify which prefix it needs before changing the image."}
 	default:
-		f.Evidence.Notes = []string{"Runtime prefix is an asserted or supported configuration input, not proof of exclusive execution."}
+		f.Evidence.Notes = []string{"Startup identifies or asserts the application prefix. Check activation and runtime dependencies before removing installer content."}
 	}
 	return outcome, []Finding{f}
+}
+
+// quotedPaths bounds user-facing path lists in the same way as finding evidence.
+func quotedPaths(paths []string) string {
+	shown := sampleStrings(paths)
+	for i, p := range shown {
+		shown[i] = "`" + p + "`"
+	}
+	text := strings.Join(shown, ", ")
+	if len(paths) > len(shown) {
+		text += fmt.Sprintf(" (and %d more)", len(paths)-len(shown))
+	}
+	return text
+}
+
+// commandArg quotes a path or selector as a single POSIX-shell argument.
+func commandArg(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func prefixRoles(target evidence.Target) ([]string, []string) {
@@ -239,12 +269,17 @@ func newFinding(target evidence.Target, rule Rule, severity Severity, paths []st
 	f := Finding{RuleID: rule.ID, Target: target.ID, Severity: severity,
 		Fingerprint: hex.EncodeToString(digest[:]), paths: paths,
 		Evidence: FindingEvidence{Paths: sampleStrings(paths), Locations: []string{}, Samples: []evidence.Artifact{}, Count: len(all), PayloadBytes: bytes}}
+	if target.Kind == "oci-archive" {
+		for i, p := range f.Evidence.Paths {
+			f.Evidence.Paths[i] = path.Join("/", p)
+		}
+	}
 	for _, p := range f.Evidence.Paths {
 		f.Evidence.Locations = append(f.Evidence.Locations, location(target, p))
 	}
 	if len(all) > 0 {
 		f.Evidence.Samples = slices.Clone(all[:min(len(all), MaxSamples)])
-		f.Evidence.ByteUnit = "logical payload bytes; not unique or reclaimable bytes"
+		f.Evidence.ByteUnit = "file payload bytes; not unique or reclaimable bytes"
 	}
 	return f
 }

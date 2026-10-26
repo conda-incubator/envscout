@@ -3,6 +3,7 @@ package evidence
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,7 @@ func hostPrefix(t *testing.T) string {
 	if err := os.MkdirAll(meta, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(`{"name":"demo","version":"1"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(hostRecordJSON("demo", "")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(meta, "history"), []byte("==> initial <==\n==> update <==\n"), 0o644); err != nil {
@@ -43,11 +44,11 @@ func TestCollectHostAndProject(t *testing.T) {
 	if target.Project == nil || !target.Project.Associated || target.Project.LockPath != "" || !strings.HasPrefix(target.ID, "file:") {
 		t.Fatalf("missing explicit association: %+v", target)
 	}
-	if err := os.WriteFile(filepath.Join(project, "pixi.lock"), []byte("version: 6"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(project, "pixi.lock"), []byte(hostPixiLock), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err = CollectHost(context.Background(), []string{prefix}, request)
-	if err != nil || snapshot.Targets[0].Project.LockVerified || snapshot.Targets[0].Project.LockPath == "" {
+	if err != nil || snapshot.Targets[0].Project.LockPath == "" {
 		t.Fatalf("lock presence claimed verification: %+v, %v", snapshot, err)
 	}
 }
@@ -69,7 +70,7 @@ func TestDisabledHistoryDoesNotInspectInvalidHistory(t *testing.T) {
 	if err := os.Remove(history); err != nil {
 		t.Fatal(err)
 	}
-	// A directory is invalid history but must be irrelevant to EC004-only lint.
+	// A directory is invalid history but must be irrelevant to ENV002-only lint.
 	if err := os.Mkdir(history, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -105,8 +106,8 @@ func (c *countdownContext) Err() error {
 // Partial coverage, never Complete. The exact budget is not pinned.
 func TestHostCancellationPreservesPartialFindings(t *testing.T) {
 	shared := t.TempDir()
-	writeMeta(t, filepath.Join(shared, "a"), "pkg.json", `{"name":"a","version":"1"}`)
-	writeMeta(t, filepath.Join(shared, "b"), "pkg.json", `{"name":"b","version":"1"}`)
+	writeMeta(t, filepath.Join(shared, "a"), "pkg.json", hostRecordJSON("a", ""))
+	writeMeta(t, filepath.Join(shared, "b"), "pkg.json", hostRecordJSON("b", ""))
 	roots := []string{shared}
 	sawPartial := false
 	for limit := 1; limit < 2000; limit++ {
@@ -174,7 +175,7 @@ func TestHostNestedEnvDoesNotValidateOuterPrefix(t *testing.T) {
 	outer := filepath.Join(t.TempDir(), "outer")
 	writeMeta(t, outer, "bad.json", `{"version":"1"}`)
 	nested := filepath.Join(outer, "envs", "inner")
-	writeMeta(t, nested, "pkg.json", `{"name":"inner","version":"1"}`)
+	writeMeta(t, nested, "pkg.json", hostRecordJSON("inner", ""))
 
 	snapshot, err := CollectHost(context.Background(), []string{outer}, Request{Capabilities: []string{"prefixes"}})
 	if err != nil {
@@ -231,16 +232,24 @@ func TestHostUnrelatedSubtreeDoesNotAffectPrefixValidation(t *testing.T) {
 func TestHostMetadataValidationDoesNotFollowRecordLinks(t *testing.T) {
 	prefix := hostPrefix(t)
 	outside := filepath.Join(t.TempDir(), "outside.json")
-	if err := os.WriteFile(outside, []byte(`{"name":"outside","version":"1"}`), 0o644); err != nil {
+	if err := os.WriteFile(outside, []byte(hostRecordJSON("outside", "")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(prefix, "conda-meta", "alias.json")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	records, err := condaRecordsForPrefix(context.Background(), prefix)
-	if err != nil || len(records) != 1 || records[0].Name == "outside" {
+	if err == nil || len(records) != 1 || records[0].Record.Name == "outside" {
 		t.Fatalf("metadata validation followed a record link: %+v, %v", records, err)
 	}
+}
+
+func hostRecordJSON(name, extra string) string {
+	ownership := `,"files":[]`
+	if strings.Contains(extra, `"files"`) || strings.Contains(extra, `"paths_data"`) {
+		ownership = ""
+	}
+	return fmt.Sprintf(`{"name":%q,"version":"1","build":"0","build_number":0,"subdir":"linux-64","fn":%q,"url":%q%s%s}`, name, name+"-1-0.conda", "https://conda.anaconda.org/conda-forge/linux-64/"+name+"-1-0.conda", ownership, extra)
 }
 
 func hasIssue(snapshot Snapshot, path string) bool {

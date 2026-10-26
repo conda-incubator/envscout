@@ -9,6 +9,26 @@ import (
 	"testing"
 )
 
+func TestParsePixiMarkerRequiresExplicitSelection(t *testing.T) {
+	for _, contents := range []string{
+		`{}`,
+		`{"manifest_path":"pixi.toml","environment_name":"default","resolved_platform":{"subdir":"linux-64"}}`,
+		`{"manifest_path":"/workspace/pixi.toml","environment_name":"default"}`,
+		`{"manifest_path":"/workspace/pixi.toml","environment_name":"","resolved_platform":{"subdir":"linux-64"}}`,
+		strings.Repeat(" ", 64<<10+1),
+	} {
+		if marker, err := ParsePixiMarker([]byte(contents)); err == nil {
+			t.Fatalf("incomplete marker accepted: %+v", marker)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "pixi.toml")
+	contents, _ := json.Marshal(map[string]any{"manifest_path": path, "environment_name": "test", "resolved_platform": map[string]string{"subdir": "linux-64"}})
+	marker, err := ParsePixiMarker(contents)
+	if err != nil || marker.ManifestPath != path || marker.EnvironmentName != "test" || marker.Subdir != "linux-64" {
+		t.Fatalf("explicit marker = %+v %v", marker, err)
+	}
+}
+
 func TestPixiLockSummary(t *testing.T) {
 	workspace := t.TempDir()
 	prefix := filepath.Join(workspace, ".pixi", "envs", "default")
@@ -16,7 +36,7 @@ func TestPixiLockSummary(t *testing.T) {
 	if err := os.MkdirAll(meta, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(meta, "python.json"), []byte(`{"name":"python","version":"3.12","build":"0"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(meta, "python.json"), []byte(`{"name":"python","version":"3.12","build":"0","build_number":0,"subdir":"osx-arm64","fn":"python-3.12-0.conda","url":"https://conda.anaconda.org/conda-forge/osx-arm64/python-3.12-0.conda","files":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	lock := `version: 4
@@ -73,7 +93,7 @@ func TestScanCondaIncludesPixiLockSummary(t *testing.T) {
 	if err := os.MkdirAll(meta, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(meta, "python.json"), []byte(`{"name":"python","version":"3.12","build":"0"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(meta, "python.json"), []byte(`{"name":"python","version":"3.12","build":"0","build_number":0,"subdir":"osx-arm64","fn":"python-3.12-0.conda","url":"https://conda.anaconda.org/conda-forge/osx-arm64/python-3.12-0.conda","files":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	lock := `version: 4

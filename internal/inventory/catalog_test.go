@@ -145,7 +145,7 @@ func condaFixture(t *testing.T, files map[string]string) string {
 
 func TestCondaRecordsReturnsCondaOnly(t *testing.T) {
 	root := condaFixture(t, map[string]string{
-		"python-3.12-0.json": `{"name":"python","version":"3.12","build":"0","license":"PSF-2.0"}`,
+		"python-3.12-0.json": canonicalRecordJSON("python", "3.12"),
 	})
 	src, err := directorysource.NewFromPath(root)
 	if err != nil {
@@ -160,15 +160,11 @@ func TestCondaRecordsReturnsCondaOnly(t *testing.T) {
 		t.Fatalf("records = %d, want 1: %+v", len(records), records)
 	}
 	p := records[0]
-	if p.Name != "python" || p.Version != "3.12" || p.Type != pkg.CondaPkg || p.FoundBy != "conda-meta-cataloger" || p.ID() == "" {
+	if p.Record.Name != "python" || p.Record.Version != "3.12" || p.Record.Build != "0" {
 		t.Fatalf("unexpected record: %+v", p)
 	}
-	meta, ok := p.Metadata.(pkg.CondaMetaPackage)
-	if !ok || meta.Name != "python" || meta.Version != "3.12" {
-		t.Fatalf("metadata not preserved as pkg.CondaMetaPackage: %#v", p.Metadata)
-	}
-	if p.Locations.Empty() {
-		t.Fatal("record lost its location")
+	if !strings.HasSuffix(p.Path, "conda-meta/python-3.12-0.json") || p.Record.SourcePath != p.Path {
+		t.Fatalf("record lost its location: %+v", p)
 	}
 	// Borrowed source must still resolve after CondaRecords returns.
 	if _, err := src.FileResolver(source.SquashedScope); err != nil {
@@ -178,7 +174,7 @@ func TestCondaRecordsReturnsCondaOnly(t *testing.T) {
 
 func TestCondaRecordsMalformedJSONReturnsPartialWithError(t *testing.T) {
 	root := condaFixture(t, map[string]string{
-		"good-1.0-0.json": `{"name":"good","version":"1.0","build":"0"}`,
+		"good-1.0-0.json": canonicalRecordJSON("good", "1.0"),
 		"bad-1.0-0.json":  `{`,
 	})
 	src, err := directorysource.NewFromPath(root)
@@ -190,16 +186,16 @@ func TestCondaRecordsMalformedJSONReturnsPartialWithError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "bad-1.0-0.json") {
 		t.Fatalf("expected malformed JSON error naming the file, got %v", err)
 	}
-	if len(records) != 1 || records[0].Name != "good" {
+	if len(records) != 1 || records[0].Record.Name != "good" {
 		t.Fatalf("partial records = %+v, want only good", records)
 	}
 }
 
 func TestCondaRecordsRejectsEmptyNameOrVersion(t *testing.T) {
 	root := condaFixture(t, map[string]string{
-		"noname-1.0-0.json": `{"name":"","version":"1.0","build":"0"}`,
-		"nover-0-0.json":    `{"name":"nover","version":"","build":"0"}`,
-		"ok-2.0-0.json":     `{"name":"ok","version":"2.0","build":"0"}`,
+		"noname-1.0-0.json": strings.Replace(canonicalRecordJSON("noname", "1.0"), `"name":"noname"`, `"name":""`, 1),
+		"nover-0-0.json":    strings.Replace(canonicalRecordJSON("nover", "1.0"), `"version":"1.0"`, `"version":""`, 1),
+		"ok-2.0-0.json":     canonicalRecordJSON("ok", "2.0"),
 	})
 	src, err := directorysource.NewFromPath(root)
 	if err != nil {
@@ -207,15 +203,15 @@ func TestCondaRecordsRejectsEmptyNameOrVersion(t *testing.T) {
 	}
 	defer func() { _ = src.Close() }()
 	records, err := CondaRecords(context.Background(), src, source.SquashedScope)
-	if err == nil || !strings.Contains(err.Error(), "dropped 2 conda record(s)") {
-		t.Fatalf("expected one validation error for two invalid records, got %v", err)
+	if err == nil {
+		t.Fatal("expected validation errors for two invalid records")
 	}
 	for _, name := range []string{"noname-1.0-0.json", "nover-0-0.json"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Fatalf("validation error omits location %s: %v", name, err)
 		}
 	}
-	if len(records) != 1 || records[0].Name != "ok" {
+	if len(records) != 1 || records[0].Record.Name != "ok" {
 		t.Fatalf("records = %+v, want only ok", records)
 	}
 }

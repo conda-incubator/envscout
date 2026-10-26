@@ -134,7 +134,7 @@ func TestCollectOCIPartialEvidenceIsPreserved(t *testing.T) {
 	// An oversized cache index is an established partial-coverage trigger.
 	archive := testimage.Archive(t, []testimage.Entry{
 		packageMarker("opt/conda/conda-meta/conda.json", "conda"),
-		{Name: "opt/conda/pkgs/pkg.conda", Data: "archive"},
+		{Name: "opt/conda/pkgs/pkg-1.0-0.conda", Data: "archive"},
 		{Name: "opt/conda/pkgs/broken/info/index.json", Data: strings.Repeat("x", imageMetadataLimit+1)},
 	})
 	snapshot, err := Collect(context.Background(), "oci-archive", []string{archive}, "linux/amd64", Request{Capabilities: []string{"prefixes", "final-cache"}})

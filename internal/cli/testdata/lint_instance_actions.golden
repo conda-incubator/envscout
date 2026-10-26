@@ -1,0 +1,13 @@
+Lint | profile local | ruleset 5
+Target: file:///golden/env (1 prefixes)
+ENV010 warning file:///golden/env
+  Found: Installed numpy in `/golden/env` differs from `/golden/project/pixi.lock` (environment science, subdir linux-64). Installed conda package metadata differs from the Pixi lock selection used for this prefix.
+  Evidence: /golden/env
+  Evidence: /golden/project/pixi.lock
+  Note: numpy: locked 1, installed 2
+  Next: In a POSIX shell, run `pixi install --manifest-path '/golden/project/pixi.toml' --environment 'science'`, then repeat this check.
+ENV002 info file:///golden/env
+  Found: The associated project `/golden/unlocked` has no lockfile. A resolved lock records dependency choices that a manifest alone leaves open.
+  Evidence: /golden/unlocked
+  Next: In the associated project, run `pixi lock`, `conda-lock lock`, or the locking command for its package manager.
+Summary: completed; 1 targets; 2 findings; 0 unknown

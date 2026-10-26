@@ -1,13 +1,13 @@
-Lint | profile container-distroless | ruleset 2
-Target: oci-archive:golden-image (2 confirmed prefixes)
-IC003 info oci-archive:golden-image
-  Confirmed tooling prefixes coexist with distinct application-prefix candidates.
-  Next: Review the separate tooling and application roles before considering a compatible runtime-stage copy. Configuration hints do not prove that a prefix is unused; an application running in base is valid. Preserve required activation, runtime libraries and relocation behavior.
-  Evidence: oci-archive:golden-image#/opt/conda
-  Evidence: oci-archive:golden-image#/opt/conda/envs/app
-IC007 error oci-archive:golden-image
-  1 shell command identities are confirmed under the selected shell policy.
-  Next: Review intentional debug and shell-dependent startup exceptions. Validate exec-form startup, activation and runtime behavior before changing to a shell-free compatible runtime base; shell presence alone is not a vulnerability finding.
-  Evidence: /bin/sh (900000 logical payload bytes)
-Summary: completed; 1 targets; pass 0, findings 2, unknown 0, not applicable 0, disabled 8, suppressed 0
-Coverage: selected rules and stated scopes only; this is not a vulnerability assessment.
+Lint | profile container-distroless | ruleset 5
+Target: oci-archive:golden-image (2 prefixes)
+IMG003 info oci-archive:golden-image
+  Found: Installer prefixes `/opt/conda` coexist with application-prefix candidates `/opt/conda/envs/app`. A separate installer can add build tooling to the application image.
+  Evidence: /opt/conda
+  Evidence: /opt/conda/envs/app
+  Note: The application candidate comes from its nested envs/ path. Startup may use a wrapper; verify which prefix it needs before changing the image.
+  Next: Copy the tested application prefix into a compatible runtime stage and validate startup, activation, runtime libraries and relocation.
+IMG006 error oci-archive:golden-image
+  Found: 1 shell executables remain in the image at `/bin/sh`. A shell conflicts with the shell-free policy selected by the distroless profile or this explicit rule.
+  Evidence: /bin/sh (878.9 KiB)
+  Next: Use exec-form `CMD` with a shell-free compatible base. For intentional shells, select `--profile container-runtime` and remove any explicit IMG006 enablement, or record a reviewed suppression.
+Summary: completed; 1 targets; 2 findings; 0 unknown

@@ -1,3 +1,2 @@
-Lint | profile local | ruleset 2
-Summary: completed; 0 targets; pass 0, findings 0, unknown 0, not applicable 0, disabled 0, suppressed 0
-Coverage: selected rules and stated scopes only; this is not a vulnerability assessment.
+Lint | profile local | ruleset 5
+Summary: completed; 0 targets; 0 findings; 0 unknown

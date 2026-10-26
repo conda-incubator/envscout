@@ -24,7 +24,7 @@ func lintFixture(t *testing.T, revision int) string {
 	if err := os.MkdirAll(meta, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(`{"name":"demo","version":"1"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(canonicalPrefixRecord("demo", "1", "0")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(meta, "history"), []byte(strings.Repeat("==> transaction <==\n", revision+1)), 0o644); err != nil {
@@ -51,7 +51,7 @@ func TestLintLocalPolicyAndExitCodes(t *testing.T) {
 	prefix := lintFixture(t, 12)
 	t.Chdir(t.TempDir())
 	output, err := executeLint(t, prefix)
-	if err != nil || !strings.Contains(output, "EC001") || !strings.Contains(output, "not a vulnerability") {
+	if err != nil || !strings.Contains(output, "ENV001") || !strings.Contains(output, "Found:") || !strings.Contains(output, "Next:") {
 		t.Fatalf("local informational lint: %v: %s", err, output)
 	}
 	output, err = executeLint(t, "--format", "json", "--fail-on", "info", prefix)
@@ -61,7 +61,7 @@ func TestLintLocalPolicyAndExitCodes(t *testing.T) {
 	if _, err := os.Stat("sboms"); !os.IsNotExist(err) {
 		t.Fatal("lint created SBOMs")
 	}
-	if output, err := executeLint(t, "--fail-on", "none", prefix); err != nil || !strings.Contains(output, "EC001") {
+	if output, err := executeLint(t, "--fail-on", "none", prefix); err != nil || !strings.Contains(output, "ENV001") {
 		t.Fatalf("disabled threshold lost findings: %v %s", err, output)
 	}
 }
@@ -73,11 +73,16 @@ func TestLintListsAllRegisteredRules(t *testing.T) {
 		Available         bool   `json:"available"`
 		UnavailableReason string `json:"unavailable_reason"`
 	}
-	if err != nil || json.Unmarshal([]byte(output), &listed) != nil || len(listed) != 10 {
+	if err != nil || json.Unmarshal([]byte(output), &listed) != nil || len(listed) != len(policy.ListRules()) {
 		t.Fatalf("incorrect rules listing: %v %s", err, output)
 	}
+	seen := make(map[string]bool, len(listed))
 	for _, rule := range listed {
-		if rule.ID == "EC002" || rule.ID == "EC003" {
+		if _, ok := policy.LookupRule(rule.ID); !ok || seen[rule.ID] {
+			t.Fatalf("unregistered or duplicate rule in catalogue: %+v", rule)
+		}
+		seen[rule.ID] = true
+		if rule.ID == "ENV011" {
 			if rule.Available || rule.UnavailableReason == "" {
 				t.Fatalf("unavailable rule not disclosed: %+v", rule)
 			}
@@ -85,8 +90,11 @@ func TestLintListsAllRegisteredRules(t *testing.T) {
 			t.Fatalf("bad listed rule: %+v", rule)
 		}
 	}
+	if !seen["ENV011"] {
+		t.Fatal("catalogue omits unavailable manifest/lock rule")
+	}
 	output, err = executeLint(t, "--list-rules")
-	if err != nil || !strings.Contains(output, "EC002") || !strings.Contains(output, "unavailable") {
+	if err != nil || !strings.Contains(output, "ENV011") || !strings.Contains(output, "Unavailable:") {
 		t.Fatalf("text rules listing hides unavailable rules: %v %s", err, output)
 	}
 }
@@ -105,8 +113,8 @@ func TestLintJSONSchemaOmitsDerivedFindingMetadata(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &report); err != nil {
 		t.Fatalf("decode report: %v", err)
 	}
-	if report.SchemaVersion != 3 || policy.SchemaVersion != 3 {
-		t.Fatalf("schema_version = %d, want 3", report.SchemaVersion)
+	if report.SchemaVersion != 4 || policy.SchemaVersion != 4 {
+		t.Fatalf("schema_version = %d, want 4", report.SchemaVersion)
 	}
 	if len(report.Findings) == 0 {
 		t.Fatal("expected at least one finding")
@@ -146,7 +154,8 @@ func TestLintJSONSchemaOmitsDerivedFindingMetadata(t *testing.T) {
 func TestLintInputErrorsBeforeCollection(t *testing.T) {
 	for _, args := range [][]string{
 		{}, {"--unknown"}, {"--profile", "bad", "missing"}, {"--fail-on", "bad", "missing"},
-		{"--rule", "EC002", "missing"}, {"--rule", "EC001", "--disable-rule", "EC001", "missing"},
+		{"--rule", "ENV011", "missing"}, {"--rule", "ENV001", "--disable-rule", "ENV001", "missing"},
+		{"--rule", "EC001", "missing"}, {"--disable-rule", "IC001", "missing"},
 		{"--source", "oci-archive", "missing.tar"}, {"--platform", "linux/amd64", "missing"},
 		{"--runtime-prefix", "/app", "missing"}, {"--list-rules", "missing"}, {"--format", "sarif", "missing"},
 		{"--list-rules", "--fail-on", "invalid"},
@@ -158,14 +167,43 @@ func TestLintInputErrorsBeforeCollection(t *testing.T) {
 	}
 }
 
+func TestLintRejectsLegacyRuleIDsInFlagsAndPolicy(t *testing.T) {
+	prefix := lintFixture(t, 0)
+	for _, id := range []string{"EC001", "EC004", "EC002", "EC003", "IC001", "IC002", "IC003", "IC004", "IC006", "IC007"} {
+		for _, flag := range []string{"--rule", "--disable-rule"} {
+			output, err := executeLint(t, flag, id, prefix)
+			if ExitCode(err) != 2 || output != "" || !strings.Contains(err.Error(), id) {
+				t.Errorf("legacy flag %s %s accepted: %v %s", flag, id, err, output)
+			}
+		}
+		for _, config := range []policy.Policy{
+			{Version: policy.ConfigVersion, Rules: map[string]policy.RuleOptions{id: {Severity: policy.Info}}},
+			{Version: policy.ConfigVersion, Suppressions: []policy.Suppression{{Rule: id, Target: evidence.FileID(prefix), Reason: "old exception"}}},
+		} {
+			data, err := json.Marshal(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "legacy-policy.json")
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			output, err := executeLint(t, "--config", path, prefix)
+			if ExitCode(err) != 2 || output != "" || !strings.Contains(err.Error(), id) {
+				t.Errorf("legacy policy ID %s accepted: %v %s", id, err, output)
+			}
+		}
+	}
+}
+
 func TestLintImageMultipleRulesAndLayerRetention(t *testing.T) {
 	archive := testimage.Archive(t,
 		[]testimage.Entry{
-			{Name: "opt/conda/conda-meta/conda.json", Data: `{"name":"conda","version":"26.7"}`},
-			{Name: "opt/conda/envs/app/conda-meta/demo.json", Data: `{"name":"demo","version":"1"}`},
+			{Name: "opt/conda/conda-meta/conda.json", Data: canonicalPrefixRecord("conda", "26.7", "0")},
+			{Name: "opt/conda/envs/app/conda-meta/demo.json", Data: canonicalPrefixRecord("demo", "1", "0")},
 			{Name: "opt/conda/pkgs/old-1.0-0.conda", Data: "old cache"},
 			{Name: "opt/conda/pkgs/current-1.0-0.conda", Data: "current cache"},
-			{Name: "opt/conda/pkgs/demo-1.0-0/info/index.json", Data: `{"name":"demo","version":"1.0"}`},
+			{Name: "opt/conda/pkgs/demo-1.0-0/info/index.json", Data: `{"name":"demo","version":"1.0","build":"0","build_number":0,"subdir":"linux-64"}`},
 			{Name: "usr/bin/apt", Data: "#!/bin/sh\nexit 0\n", Mode: 0o755},
 			{Name: "usr/bin/sh", Data: "\x7fELF\x02", Mode: 0o755},
 			{Name: "bin", Type: tar.TypeSymlink, Link: "usr/bin"},
@@ -177,7 +215,7 @@ func TestLintImageMultipleRulesAndLayerRetention(t *testing.T) {
 	if ExitCode(err) != 1 || !json.Valid([]byte(output)) {
 		t.Fatalf("runtime image lint: %v %s", err, output)
 	}
-	for _, rule := range []string{"IC001", "IC002", "IC003", "IC004", "IC006"} {
+	for _, rule := range []string{"IMG001", "IMG002", "IMG003", "IMG004", "IMG005"} {
 		if !strings.Contains(output, `"rule_id": "`+rule+`"`) {
 			t.Errorf("missing rule %s: %s", rule, output)
 		}
@@ -189,7 +227,7 @@ func TestLintImageMultipleRulesAndLayerRetention(t *testing.T) {
 		t.Fatal("image lint wrote SBOM")
 	}
 	output, err = executeLint(t, "--source", "oci-archive", "--platform", "linux/amd64", "--profile", "container-distroless", archive)
-	if ExitCode(err) != 1 || !strings.Contains(output, "IC007") {
+	if ExitCode(err) != 1 || !strings.Contains(output, "IMG006") {
 		t.Fatalf("distroless shell policy missing: %v %s", err, output)
 	}
 }
@@ -197,7 +235,7 @@ func TestLintImageMultipleRulesAndLayerRetention(t *testing.T) {
 func TestLintConfigSuppressionsAndInspectionFailures(t *testing.T) {
 	prefix := lintFixture(t, 12)
 	config := filepath.Join(t.TempDir(), "policy.json")
-	data, err := json.Marshal(map[string]any{"version": 1, "fail_on": "info", "suppressions": []map[string]string{{"rule": "EC001", "target": evidence.FileID(prefix), "reason": "accepted iterative development"}}})
+	data, err := json.Marshal(map[string]any{"version": 1, "fail_on": "info", "suppressions": []map[string]string{{"rule": "ENV001", "target": evidence.FileID(prefix), "reason": "accepted iterative development"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,8 +299,8 @@ func TestLintProjectRuleIgnoresDisabledHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := executeLint(t, "--rule", "EC004", "--project", project, prefix)
-	if err != nil || !strings.Contains(output, "EC004") || strings.Contains(output, "Inspection issue") {
+	output, err := executeLint(t, "--rule", "ENV002", "--project", project, prefix)
+	if err != nil || !strings.Contains(output, "ENV002") || strings.Contains(output, "Inspection issue") {
 		t.Fatalf("disabled history changed project-rule result: %v %s", err, output)
 	}
 }

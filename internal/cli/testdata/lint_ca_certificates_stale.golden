@@ -1,0 +1,7 @@
+Lint | profile local | ruleset 5
+Target: file:///golden/env (1 prefixes)
+ENV013 warning file:///golden/env
+  Found: ca-certificates 2026.10.19 in `/golden/env`, recorded at `/golden/env/conda-meta/ca-certificates.json`, is below the defaults recommended minimum 2026.10.20 following the October 2026 eMudhra incident. Update this environment's CA package independently of base.
+  Evidence: /golden/env/conda-meta/ca-certificates.json
+  Next: Update certifi to >=2026.10.19 and ca-certificates to >=2026.10.19 on conda-forge or >=2026.10.20 on Anaconda main, in each affected prefix; update image builds and project locks as appropriate. Keep certificate verification enabled.
+Summary: completed; 1 targets; 1 findings; 0 unknown

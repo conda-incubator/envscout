@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,9 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anchore/syft/syft/pkg"
 	"github.com/anchore/syft/syft/source"
-	"github.com/anchore/syft/syft/source/directorysource"
 	"github.com/conda-incubator/envscout/internal/discovery"
 	"github.com/conda-incubator/envscout/internal/inventory"
 )
@@ -99,8 +97,19 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 				snapshot.Issues = append(snapshot.Issues, Issue{Capability: "prefixes", Path: env.Path, Message: "no valid conda package metadata; prefix not counted"})
 			}
 		} else {
+			recordCoverage := Complete
+			if err != nil {
+				recordCoverage = Partial
+			}
+			tooling := false
+			for _, record := range records {
+				tooling = tooling || toolingName(record.Record.Name)
+			}
 			validated = append(validated, Target{ID: FileID(env.Path), Kind: "dir", Input: env.Path, Roots: report.Roots,
-				Prefixes: []Prefix{{Path: env.Path, Revision: env.Revision}}, Coverage: map[string]string{}, Issues: []Issue{}})
+				Prefixes: []Prefix{{Path: env.Path, Revision: env.Revision, Tooling: tooling, Records: records, RecordCoverage: recordCoverage}}, Coverage: map[string]string{}, Issues: []Issue{}})
+			if err != nil && Requested(req, "conda-records") {
+				hostIssue(&validated[len(validated)-1], "conda-records", env.Path, "installed conda record collection is incomplete")
+			}
 		}
 		if cancelErr != nil {
 			break
@@ -136,6 +145,15 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		if Requested(req, "project-association") {
 			target.Coverage["project-association"] = Complete
 		}
+		for _, capability := range []string{"conda-records", "python-distributions", "host-cache", "installed-lock"} {
+			target.Coverage[capability] = NotCollected
+			if Requested(req, capability) {
+				target.Coverage[capability] = Complete
+			}
+		}
+		if Requested(req, "conda-records") {
+			target.Coverage["conda-records"] = target.Prefixes[0].RecordCoverage
+		}
 	}
 	// Project association uses the final validated list and runs once, only when the
 	// collection finished without cancellation.
@@ -144,7 +162,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			return snapshot, errors.Join(discoveryErr, fmt.Errorf("--project requires exactly one validated prefix for an explicit association"))
 		}
 		if Requested(req, "project-association") {
-			project, issue, err := collectProject(req.Project)
+			project, issue, err := collectProjectContext(ctx, req.Project)
 			if err != nil {
 				return snapshot, err
 			}
@@ -156,45 +174,89 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			}
 		}
 	}
+	caches := map[string]Target{}
+	for i := range snapshot.Targets {
+		target := &snapshot.Targets[i]
+		if cancelErr != nil || ctx.Err() != nil {
+			for capability, state := range target.Coverage {
+				if state != NotCollected {
+					target.Coverage[capability] = Partial
+				}
+			}
+			continue
+		}
+		if err := collectHostFacts(ctx, target, req, caches); err != nil {
+			cancelErr = errors.Join(cancelErr, err)
+		}
+	}
 	if len(snapshot.Targets) == 0 && len(report.Roots) > 0 {
 		snapshot.Targets = append(snapshot.Targets, Target{ID: FileID(report.Roots[0]), Kind: "dir", Input: report.Roots[0], Roots: report.Roots,
 			Prefixes: []Prefix{}, Coverage: map[string]string{"prefixes": coverage}, Issues: []Issue{}})
+		for _, capability := range req.Capabilities {
+			snapshot.Targets[0].Coverage[capability] = coverage
+		}
 	}
 	return snapshot, errors.Join(discoveryErr, cancelErr)
 }
 
-// condaRecordsForPrefix returns the valid conda records of one candidate prefix via
-// the conda-only inventory pathway. The source is rooted at the prefix's conda-meta
-// directory with the prefix as its virtual base, so Syft indexes only that directory
-// and its records keep prefix-relative paths matching the cataloger's
-// **/conda-meta/*.json glob. Nested environments and unrelated subtrees are never
-// visited. Records parsed before an error are returned with it. The source is owned
-// here and always closed.
-func condaRecordsForPrefix(ctx context.Context, prefix string) ([]pkg.Package, error) {
-	metadata := filepath.Join(prefix, "conda-meta")
-	entries, err := os.ReadDir(metadata)
+// The bounded direct metadata index never visits nested environments or follows
+// links. Inventory parses original record bytes; this layer owns the filesystem.
+func condaRecordsForPrefix(ctx context.Context, prefix string) ([]inventory.CondaRecord, error) {
+	root, err := os.OpenRoot(prefix)
 	if err != nil {
 		return nil, err
 	}
-	var exclude []string
-	for _, entry := range entries {
-		if entry.Type()&fs.ModeSymlink != 0 {
-			// Quote glob metacharacters: exclusions are patterns, filenames are not.
-			name := strings.NewReplacer("[", "\\[", "]", "\\]", "*", "\\*", "?", "\\?").Replace(entry.Name())
-			exclude = append(exclude, "./"+name)
-		}
+	defer func() { _ = root.Close() }()
+	info, err := hostLstat(root, "conda-meta")
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("conda-meta is not a real directory")
 	}
-	src, err := directorysource.New(directorysource.Config{Path: metadata, Base: prefix, Exclude: source.ExcludeConfig{Paths: exclude}})
+	dir, err := root.Open("conda-meta")
 	if err != nil {
-		return nil, fmt.Errorf("open conda-meta for %s: %w", prefix, err)
+		return nil, err
 	}
-	records, err := inventory.CondaRecords(ctx, src, source.SquashedScope)
-	return records, errors.Join(err, src.Close())
+	entries, enumerationErr := dir.ReadDir(hostEntryLimit + 1)
+	_ = dir.Close()
+	if errors.Is(enumerationErr, io.EOF) {
+		enumerationErr = nil
+	}
+	if len(entries) > hostEntryLimit {
+		entries = entries[:hostEntryLimit]
+		enumerationErr = errors.Join(enumerationErr, fmt.Errorf("conda-meta entry limit exceeded (%d)", hostEntryLimit))
+	}
+	resolver := &hostFileResolver{ctx: ctx, root: root, base: prefix, files: map[string]os.FileInfo{}, readLimit: inventory.CondaRecordByteLimit}
+	for _, entry := range entries {
+		if ctx.Err() != nil {
+			break
+		}
+		if filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			enumerationErr = errors.Join(enumerationErr, fmt.Errorf("linked conda record %s is not followed", filepath.Join(prefix, "conda-meta", entry.Name())))
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			enumerationErr = errors.Join(enumerationErr, fmt.Errorf("conda record metadata unavailable"))
+			continue
+		}
+		name := filepath.Join("conda-meta", entry.Name())
+		resolver.files[name] = info
+		resolver.paths = append(resolver.paths, name)
+	}
+	sort.Strings(resolver.paths)
+	records, err := inventory.CondaRecords(ctx, hostRecordSource{resolver}, source.SquashedScope)
+	return records, errors.Join(err, enumerationErr, ctx.Err())
 }
 
 // The association is supplied by the caller. Presence of a lock is not proof of
 // manifest or installation synchronization; those require separate verifiers.
 func collectProject(input string) (*Project, *Issue, error) {
+	return collectProjectContext(context.Background(), input)
+}
+
+func collectProjectContext(ctx context.Context, input string) (*Project, *Issue, error) {
 	abs, err := filepath.Abs(input)
 	if err != nil {
 		return nil, nil, err
@@ -218,8 +280,19 @@ func collectProject(input string) (*Project, *Issue, error) {
 		if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 || info.Size() == 0 {
 			return p, &Issue{Capability: "project-association", Path: filepath.Join(abs, name), Message: "lock candidate is inaccessible, empty, linked or oversized"}, nil
 		}
+		if name == "pixi.lock" {
+			data, err := readHostMetadata(ctx, root, name, 1<<20)
+			if err != nil || validatePixiLock(data) != nil {
+				return p, &Issue{Capability: "project-association", Path: filepath.Join(abs, name), Message: "Pixi lock could not be parsed; lock presence is unknown"}, ctx.Err()
+			}
+		}
 		p.LockPath = filepath.Join(abs, name)
-		p.Reason = "lock candidate present; format/synchronization verifier unavailable"
+		p.Reason = "regular lock presence only; installed metadata and manifest synchronization not verified"
+		if name == "pixi.lock" {
+			p.Reason = "parsed Pixi lock presence only; installed metadata and manifest synchronization not verified"
+		} else {
+			p.Reason += "; format parser unavailable"
+		}
 		return p, nil, nil
 	}
 	return p, nil, nil

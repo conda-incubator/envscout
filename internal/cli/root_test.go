@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +13,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/fatih/color"
 )
+
+func canonicalPrefixRecord(name, version, build string) string {
+	return fmt.Sprintf(`{"name":%q,"version":%q,"build":%q,"build_number":0,"subdir":"linux-64","channel":"conda-forge","files":[],"fn":%q,"url":%q}`,
+		name, version, build, name+"-"+version+"-"+build+".conda", "https://conda.anaconda.org/conda-forge/linux-64/"+name+"-"+version+"-"+build+".conda")
+}
 
 func TestCommands(t *testing.T) {
 	tests := []struct {
@@ -55,7 +61,7 @@ func TestFindReport(t *testing.T) {
 	if err := os.MkdirAll(meta, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(`{"name":"pkg","version":"1"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(canonicalPrefixRecord("pkg", "1", "0")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(meta, "history"), []byte("==> date <==\n"), 0o644); err != nil {
@@ -142,7 +148,7 @@ func TestFindJSON(t *testing.T) {
 	if err := os.MkdirAll(meta, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(`{"name":"pkg","version":"1"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(canonicalPrefixRecord("pkg", "1", "0")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cmd := New()
@@ -189,7 +195,7 @@ func TestFindKnownLocationsJSON(t *testing.T) {
 	if err := os.MkdirAll(meta, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(meta, "demo.json"), []byte(`{"name":"demo","version":"1"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(meta, "demo.json"), []byte(canonicalPrefixRecord("demo", "1", "0")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cmd := New()
@@ -235,7 +241,7 @@ func TestScanWritesOneSBOMPerPrefix(t *testing.T) {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(path, "package.json"), []byte(`{"name":"python","version":"3.12","build":"0"}`), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(path, "package.json"), []byte(canonicalPrefixRecord("python", "3.12", "0")), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -313,7 +319,7 @@ func TestScanReportsPartialInventory(t *testing.T) {
 	if err := os.MkdirAll(good, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(good, "pkg.json"), []byte(`{"name":"pkg","version":"1"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(good, "pkg.json"), []byte(canonicalPrefixRecord("pkg", "1", "0")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(t.TempDir())
