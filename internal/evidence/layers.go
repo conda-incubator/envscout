@@ -9,6 +9,7 @@ import (
 
 	"github.com/anchore/stereoscope/pkg/file"
 	"github.com/anchore/stereoscope/pkg/filetree/filenode"
+	gorattler "github.com/conda-incubator/go-rattler"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
@@ -94,12 +95,20 @@ func (c *imageCollector) collectLayers() error {
 				c.issue(capability, name, err.Error())
 				return nil
 			}
-			record, valid := readRecord(data)
-			if !valid {
+			var packageName string
+			var parseErr error
+			if marker {
+				_, parseErr = gorattler.ParseIndexJSON(data)
+			} else {
+				var record gorattler.PrefixRecord
+				record, parseErr = gorattler.ParsePrefixRecord(data)
+				packageName = record.Name
+			}
+			if parseErr != nil {
 				c.issue(capability, name, "invalid historical conda marker")
 				return nil
 			}
-			if !marker && !toolingName(record.Name) {
+			if !marker && !toolingName(packageName) {
 				return nil
 			}
 			context := markers[name]

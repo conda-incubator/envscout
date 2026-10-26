@@ -196,7 +196,7 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 	r := Report{SchemaVersion: SchemaVersion, Tool: "envscout", ToolVersion: "development",
 		RulesetVersion: RulesetVersion, ProfileVersion: ProfileVersion, Profile: policy.Profile,
 		Source: policy.Source, RuntimePrefix: policy.RuntimePrefix, Project: policy.Project,
-		StartedAt: snapshot.Started, Policy: policy, Status: "completed", Limits: ReportLimits{MaxSamples, MaxFindings},
+		StartedAt: snapshot.Started, EvaluatedAt: now.UTC(), Policy: policy, Status: "completed", Limits: ReportLimits{MaxSamples, MaxFindings},
 		Targets: []TargetReport{}, Outcomes: []Outcome{}, OutcomeCounts: zeroCounts(), Findings: []Finding{},
 		Issues: slices.Clone(snapshot.Issues), SuppressionNotes: []SuppressionNote{}}
 	if r.Issues == nil {
@@ -217,15 +217,34 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 	}
 	targets := slices.Clone(snapshot.Targets)
 	slices.SortFunc(targets, func(a, b evidence.Target) int { return strings.Compare(a.ID, b.ID) })
+	var peers []evidence.Prefix
+	for _, target := range targets {
+		peers = append(peers, target.Prefixes...)
+	}
+	checks := map[string]func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding){}
+	for _, rule := range registry {
+		options := policy.Rules[rule.ID]
+		if rule.prepare != nil && options.Enabled != nil && *options.Enabled && slices.Contains(rule.TargetKinds, policy.Source) {
+			checks[rule.ID] = rule.prepare(peers)
+		}
+	}
 	request := Requirements(policy)
 	truncated := false
 	for _, target := range targets {
+		target.Peers = peers
+		target.AsOf = now
 		r.Issues = append(r.Issues, targetIssues(target, policy, request)...)
 		projection := targetReport(target)
 		r.Targets = append(r.Targets, projection)
 		r.Issues = append(r.Issues, projection.Issues...)
 		for _, rule := range registry {
+			if check := checks[rule.ID]; check != nil {
+				rule.Check = check
+			}
 			outcome, findings := evaluateRule(target, policy, rule)
+			if outcome.limited {
+				r.Issues = append(r.Issues, evidence.Issue{Capability: "evaluation", Path: target.ID, Message: outcome.Reason})
+			}
 			if outcome.Status == Disabled || outcome.Status == NotApplicable {
 				r.OutcomeCounts[outcome.Status]++
 				continue
@@ -390,6 +409,12 @@ func findingHasPath(f *Finding, want string, targets map[string]evidence.Target)
 	for _, p := range f.paths {
 		if location(target, p) == want {
 			return true
+		}
+		if target.Kind == "oci-archive" {
+			absolute := path.Join("/", p)
+			if absolute == want || location(target, absolute) == want {
+				return true
+			}
 		}
 	}
 	return false

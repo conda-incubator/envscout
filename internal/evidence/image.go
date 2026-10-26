@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,11 +14,11 @@ import (
 	"github.com/anchore/stereoscope/pkg/file"
 	"github.com/anchore/stereoscope/pkg/filetree"
 	"github.com/anchore/stereoscope/pkg/filetree/filenode"
-	"github.com/anchore/syft/syft/pkg"
 	"github.com/anchore/syft/syft/source"
 	"github.com/conda-incubator/envscout/internal/discovery"
 	"github.com/conda-incubator/envscout/internal/imageinput"
 	"github.com/conda-incubator/envscout/internal/inventory"
+	gorattler "github.com/conda-incubator/go-rattler"
 )
 
 const (
@@ -28,7 +27,7 @@ const (
 	imageMetadataLimit = 1 << 20
 )
 
-var imageCapabilities = []string{"prefixes", "history", "tooling-prefix", "final-cache", "cache-link-dependencies", "runtime-config", "os-package-tools", "shell-tools", "layer-retention"}
+var imageCapabilities = []string{"prefixes", "conda-records", "history", "tooling-prefix", "final-cache", "cache-link-dependencies", "runtime-config", "os-package-tools", "shell-tools", "layer-retention"}
 
 type imageCollector struct {
 	ctx     context.Context
@@ -48,8 +47,10 @@ type imageCollector struct {
 // prefixRecords is the parsed final-record facts for one prefix. Membership in the map is
 // the validity signal; there is no separate flag.
 type prefixRecords struct {
-	tooling bool
-	// cacheRoots are cache roots named by the record's ExtractedPackageDir or Link.Source
+	tooling  bool
+	records  []inventory.CondaRecord
+	coverage string
+	// cacheRoots are cache roots named by the record's extracted/tarball path or Link.Source
 	// (parent directory), kept only when the root is a real directory in the final tree.
 	cacheRoots []string
 }
@@ -109,13 +110,16 @@ func (c *imageCollector) cancelled(ctx context.Context) error {
 			c.target.Coverage[capability] = Partial
 		}
 	}
+	for i := range c.target.Prefixes {
+		c.target.Prefixes[i].RecordCoverage = Partial
+	}
 	return cause
 }
 
 // run executes the requested phases in dependency order. Each phase returns on error or
 // cancellation; the caller then reports partial coverage.
 func (c *imageCollector) run(req Request) error {
-	needsPrefixes := Requested(req, "prefixes") || Requested(req, "history") || Requested(req, "tooling-prefix") || Requested(req, "runtime-config")
+	needsPrefixes := Requested(req, "prefixes") || Requested(req, "conda-records") || Requested(req, "history") || Requested(req, "tooling-prefix") || Requested(req, "runtime-config")
 	needsCaches := Requested(req, "final-cache") || Requested(req, "cache-link-dependencies") || Requested(req, "layer-retention")
 	var candidates []discovery.Environment
 	if needsPrefixes {
@@ -166,7 +170,7 @@ func (c *imageCollector) reportIssues(issues []discovery.Issue) {
 			c.issue("history", issue.Path, issue.Error)
 			continue
 		}
-		for _, capability := range c.selected("prefixes", "history", "tooling-prefix", "runtime-config") {
+		for _, capability := range c.selected("prefixes", "conda-records", "history", "tooling-prefix", "runtime-config") {
 			c.issue(capability, issue.Path, issue.Error)
 		}
 	}
@@ -174,7 +178,7 @@ func (c *imageCollector) reportIssues(issues []discovery.Issue) {
 
 // confirmPrefixes uses already parsed records only, so positives survive cancellation.
 func (c *imageCollector) confirmPrefixes(req Request, candidates []discovery.Environment) {
-	dependents := c.selected("prefixes", "history", "tooling-prefix", "runtime-config")
+	dependents := c.selected("prefixes", "conda-records", "history", "tooling-prefix", "runtime-config")
 	for _, env := range candidates {
 		entry, ok := c.records[env.Path]
 		if !ok {
@@ -189,12 +193,12 @@ func (c *imageCollector) confirmPrefixes(req Request, candidates []discovery.Env
 			}
 			break
 		}
-		prefix := Prefix{Path: env.Path, Tooling: entry.tooling}
+		prefix := Prefix{Path: env.Path, Tooling: entry.tooling, Records: entry.records, RecordCoverage: entry.coverage}
 		if Requested(req, "history") {
 			prefix.Revision = env.Revision
 		}
 		c.confirmed = append(c.confirmed, prefix)
-		if Requested(req, "prefixes") || Requested(req, "history") || Requested(req, "tooling-prefix") {
+		if Requested(req, "prefixes") || Requested(req, "conda-records") || Requested(req, "history") || Requested(req, "tooling-prefix") {
 			if !Requested(req, "tooling-prefix") {
 				prefix.Tooling = false
 			}
@@ -278,16 +282,6 @@ func (c *imageCollector) walk(tree filetree.Reader, capabilities []string, visit
 	return nil
 }
 
-// readRecord decodes one conda metadata document into the canonical Syft type. A record
-// needs a non-empty name and version, the same rule inventory applies to final records.
-func readRecord(data []byte) (pkg.CondaMetaPackage, bool) {
-	var record pkg.CondaMetaPackage
-	if json.Unmarshal(data, &record) != nil || record.Name == "" || record.Version == "" {
-		return record, false
-	}
-	return record, true
-}
-
 // toolingName reports whether a parsed package is an installed conda tool.
 func toolingName(name string) bool {
 	return name == "conda" || name == "mamba" || name == "micromamba"
@@ -311,36 +305,31 @@ func (c *imageCollector) cacheRootFromRecord(extracted string) (string, bool) {
 	return root, true
 }
 
-// parseFinalRecords runs the conda-only cataloger once over the final image. It is
-// cancellation-safe: records Syft parsed before a cancel or parse error are still applied,
+// parseFinalRecords parses canonical records once over the final image. It is
+// cancellation-safe: records parsed before a cancel or parse error are still applied,
 // and the context cause is returned for the caller to report.
 func (c *imageCollector) parseFinalRecords() error {
 	src := inventory.ImageSource(c.loaded.Image, c.loaded.Identity.Input)
-	pkgs, err := inventory.CondaRecords(c.ctx, src, source.SquashedScope)
-	for _, p := range pkgs {
-		meta, ok := p.Metadata.(pkg.CondaMetaPackage)
-		if !ok {
-			continue
+	records, err := inventory.CondaRecords(c.ctx, src, source.SquashedScope)
+	coverage := Complete
+	if err != nil || c.ctx.Err() != nil {
+		coverage = Partial
+	}
+	for _, record := range records {
+		meta := record.Record
+		prefix := path.Dir(path.Dir(record.Path))
+		entry := c.records[prefix]
+		if entry == nil {
+			entry = &prefixRecords{coverage: coverage}
+			c.records[prefix] = entry
 		}
-		for _, location := range p.Locations.ToSlice() {
-			real := location.RealPath
-			// Syft follows links. Only a direct, non-alias conda-meta record establishes a prefix.
-			if real != location.AccessPath || !strings.HasSuffix(real, ".json") || path.Base(path.Dir(real)) != "conda-meta" {
-				continue
-			}
-			prefix := path.Dir(path.Dir(real))
-			entry := c.records[prefix]
-			if entry == nil {
-				entry = &prefixRecords{}
-				c.records[prefix] = entry
-			}
-			if toolingName(meta.Name) {
-				entry.tooling = true
-			}
-			for _, extracted := range []string{meta.ExtractedPackageDir, linkSource(meta)} {
-				if root, ok := c.cacheRootFromRecord(extracted); ok {
-					entry.cacheRoots = append(entry.cacheRoots, root)
-				}
+		entry.records = append(entry.records, record)
+		if toolingName(meta.Name) {
+			entry.tooling = true
+		}
+		for _, extracted := range []string{meta.ExtractedPackageDir, meta.PackageTarballFullPath, linkSource(meta)} {
+			if root, ok := c.cacheRootFromRecord(extracted); ok {
+				entry.cacheRoots = append(entry.cacheRoots, root)
 			}
 		}
 	}
@@ -350,14 +339,14 @@ func (c *imageCollector) parseFinalRecords() error {
 	if err != nil {
 		// Malformed or unparsable records are partial evidence, not a fatal error. Valid
 		// records parsed alongside them stay positive.
-		for _, capability := range c.selected("prefixes", "history", "tooling-prefix", "runtime-config", "final-cache", "layer-retention") {
+		for _, capability := range c.selected("prefixes", "conda-records", "history", "tooling-prefix", "runtime-config", "final-cache", "cache-link-dependencies", "layer-retention") {
 			c.issue(capability, "/", fmt.Sprintf("final conda records are incomplete: %v", err))
 		}
 	}
 	return nil
 }
 
-func linkSource(meta pkg.CondaMetaPackage) string {
+func linkSource(meta gorattler.PrefixRecord) string {
 	if meta.Link == nil {
 		return ""
 	}
@@ -491,7 +480,7 @@ func (c *imageCollector) collectMarkers(caches bool) error {
 			}
 			continue
 		}
-		if _, valid := readRecord(data); !valid {
+		if _, err := gorattler.ParseIndexJSON(data); err != nil {
 			for _, capability := range caps {
 				c.issue(capability, name, "invalid conda package marker")
 			}
@@ -520,7 +509,11 @@ func (c *imageCollector) inCache(p string) bool {
 	}
 }
 func archivePath(p string) bool {
-	return strings.HasSuffix(p, ".conda") || strings.HasSuffix(p, ".tar.bz2")
+	if !strings.HasSuffix(p, ".conda") && !strings.HasSuffix(p, ".tar.bz2") {
+		return false
+	}
+	_, err := gorattler.ParseArchiveFilename(path.Base(p))
+	return err == nil
 }
 func (c *imageCollector) reference(ref file.Reference) string {
 	layer := c.loaded.Image.FileCatalog.Layer(ref)
@@ -616,7 +609,7 @@ func (c *imageCollector) collectCache() error {
 			c.issue("final-cache", name, err.Error())
 			return nil
 		}
-		if _, valid := readRecord(data); !valid {
+		if _, err := gorattler.ParseIndexJSON(data); err != nil {
 			c.issue("final-cache", name, "invalid extracted cache marker")
 			return nil
 		}

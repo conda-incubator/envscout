@@ -6,17 +6,17 @@ FROM continuumio/miniconda3:26.7.1
 RUN apt-get update && apt-get install -y --no-install-recommends make \
     && rm -rf /var/lib/apt/lists/*
 
-# Force copies so deleting a cached path won't erase the application's files.
-# Keep package archives and extracted cache entries to demonstrate IC001/IC002.
+# Force copies to keep the demo independent of cache link accounting.
+# Keep package archives and extracted cache entries to demonstrate IMG001/IMG002.
 RUN conda create --yes --copy --name app python=3.13 requests
 
 # Duplicate one real downloaded archive, then delete it in a later layer.
-# Its bytes remain in image history, demonstrating IC004 without fake metadata.
+# Its bytes remain in image history, demonstrating IMG004 without fake metadata.
 RUN set -eu; \
     package="$(find /opt/conda/pkgs -maxdepth 1 -type f -name '*.conda' -print -quit)"; \
     test -n "$package"; \
-    cp "$package" /opt/conda/pkgs/demo-retained.conda
-RUN rm /opt/conda/pkgs/demo-retained.conda
+    cp "$package" /opt/conda/pkgs/demo-retained-1.0-0.conda
+RUN rm /opt/conda/pkgs/demo-retained-1.0-0.conda
 
 WORKDIR /app
 COPY app.py /app/app.py

@@ -5,18 +5,21 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/conda-incubator/envscout/internal/evidence"
 	"github.com/conda-incubator/envscout/internal/imageinput"
+	"github.com/conda-incubator/envscout/internal/inventory"
 	policy "github.com/conda-incubator/envscout/internal/lint"
+	gorattler "github.com/conda-incubator/go-rattler"
 )
 
 var updateLintGoldens = flag.Bool("update-lint-goldens", false, "rewrite internal/cli/testdata/lint_*.golden from the current renderer")
 
 // goldenTime is fixed so rendered output never depends on the wall clock.
-var goldenTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+var goldenTime = time.Date(2026, 10, 26, 3, 4, 5, 0, time.UTC)
 
 // goldenTarget is the one canonical image target shared by every image case.
 var goldenTarget = imageinput.Identity{
@@ -59,9 +62,40 @@ func renderGoldenWithConfig(t *testing.T, snapshot evidence.Snapshot, config pol
 		t.Fatalf("BuildPolicy: %v", err)
 	}
 	report := policy.Evaluate(snapshot, effective, goldenTime)
+	// Host export and Pixi install commands vary by host shell. Pin their generic
+	// fallback here; dedicated renderer tests exercise instance-action overrides.
+	image := options.Source == "oci-archive"
+	for i := range report.Findings {
+		if !image && (report.Findings[i].RuleID == "ENV001" || report.Findings[i].RuleID == "ENV010") {
+			report.Findings[i].Next = ""
+		}
+	}
 	var out bytes.Buffer
 	if err := renderLint(&out, report, "text", true); err != nil {
 		t.Fatalf("renderLint: %v", err)
+	}
+	seen := make(map[string]bool, len(report.Findings))
+	for _, finding := range report.Findings {
+		if seen[finding.Fingerprint] {
+			t.Fatalf("duplicate finding fingerprint %s: %+v", finding.Fingerprint, finding)
+		}
+		seen[finding.Fingerprint] = true
+		if finding.Suppression != nil {
+			continue
+		}
+		rule, ok := policy.LookupRule(finding.RuleID)
+		if !ok || finding.Message == "" || len(finding.Evidence.Paths) == 0 || !strings.Contains(finding.Message, finding.Evidence.Paths[0]) {
+			t.Fatalf("finding lacks observation or paths: %+v", finding)
+		}
+		next := finding.Next
+		if next == "" {
+			next = rule.Fix
+		}
+		for _, want := range []string{"Found: " + lintText(finding.Message), "Evidence: " + lintText(finding.Evidence.Paths[0]), "Next: " + lintText(next)} {
+			if !strings.Contains(out.String(), want) {
+				t.Fatalf("rendered %s omits %q: %s", finding.RuleID, want, out.String())
+			}
+		}
 	}
 	return out.String()
 }
@@ -88,8 +122,8 @@ func checkGolden(t *testing.T, name, got string) {
 }
 
 // localHistoryProjectMissingLock: a local prefix with a history revision above
-// the EC001 threshold and an explicitly associated project with no verified
-// lock (LockPath empty), so EC004 emits a positive finding. The project path is
+// the ENV001 threshold and an explicitly associated project with no supported
+// lock (LockPath empty), so ENV002 emits a positive finding. The project path is
 // asserted only in the snapshot, not via Options.Project, to keep the golden
 // portable: BuildPolicy applies filepath.Abs on Windows, which would prefix a
 // volume name and diverge from the snapshot path.
@@ -98,7 +132,7 @@ func localHistoryProjectMissingLock() evidence.Snapshot {
 	target := evidence.Target{
 		ID: "file:///golden/local/env", Kind: "dir", Input: prefix,
 		Prefixes: []evidence.Prefix{goldenPrefix("golden/local/env", intPtr(12))},
-		Project:  &evidence.Project{Path: "/golden/local/project", Associated: true, LockVerified: false},
+		Project:  &evidence.Project{Path: "/golden/local/project", Associated: true},
 		Coverage: completeCoverage("prefixes", "history", "project-association"),
 	}
 	return evidence.Snapshot{Started: goldenTime, Targets: []evidence.Target{target}}
@@ -106,7 +140,7 @@ func localHistoryProjectMissingLock() evidence.Snapshot {
 
 // imagePrefixRolesShell: a distroless image with a confirmed tooling prefix at
 // /opt/conda, a nested application prefix at /opt/conda/envs/app, and a shell
-// at /bin/sh. Only IC003 and IC007 are selected, so the golden pins exactly
+// at /bin/sh. Only IMG003 and IMG006 are selected, so the golden pins exactly
 // those two rules' positive output.
 func imagePrefixRolesShell() evidence.Snapshot {
 	target := evidence.Target{
@@ -175,12 +209,12 @@ func emptyTargets() evidence.Snapshot {
 
 func TestLintGoldenLocalHistoryProjectMissingLock(t *testing.T) {
 	checkGolden(t, "lint_local_history_project_missing_lock", renderGolden(t, localHistoryProjectMissingLock(),
-		policy.Options{Source: "dir"}))
+		policy.Options{Source: "dir", Rules: []string{"ENV001", "ENV002"}}))
 }
 
 func TestLintGoldenImagePrefixRolesShell(t *testing.T) {
 	checkGolden(t, "lint_image_prefix_roles_shell", renderGolden(t, imagePrefixRolesShell(),
-		policy.Options{Source: "oci-archive", Profile: "container-distroless", Rules: []string{"IC003", "IC007"}}))
+		policy.Options{Source: "oci-archive", Profile: "container-distroless", Rules: []string{"IMG003", "IMG006"}}))
 }
 
 func TestLintGoldenImageRetainedLayers(t *testing.T) {
@@ -188,13 +222,13 @@ func TestLintGoldenImageRetainedLayers(t *testing.T) {
 		policy.Options{Source: "oci-archive", Profile: "container-runtime"}))
 }
 
-// suppressedAndUnusedConfig suppresses the observed IC007 shell finding exactly
+// suppressedAndUnusedConfig suppresses the observed IMG006 shell finding exactly
 // and carries one suppression that matches nothing, which strict distroless
 // policy reports as an unused suppression.
 func suppressedAndUnusedConfig() policy.Policy {
 	return policy.Policy{Version: policy.ConfigVersion, Suppressions: []policy.Suppression{
-		{Rule: "IC007", Target: goldenTargetID, Reason: "reviewed debug image exception"},
-		{Rule: "IC006", Target: goldenTargetID, Reason: "stale exception with no matching finding"},
+		{Rule: "IMG006", Target: goldenTargetID, Reason: "reviewed debug image exception"},
+		{Rule: "IMG005", Target: goldenTargetID, Reason: "stale exception with no matching finding"},
 	}}
 }
 
@@ -211,4 +245,134 @@ func TestLintGoldenPartialUnknown(t *testing.T) {
 func TestLintGoldenEmptyTargets(t *testing.T) {
 	checkGolden(t, "lint_empty_targets", renderGolden(t, emptyTargets(),
 		policy.Options{Source: "dir"}))
+}
+
+func TestLintGoldenRuleCatalogue(t *testing.T) {
+	var out bytes.Buffer
+	if err := renderRules(&out, "text"); err != nil {
+		t.Fatal(err)
+	}
+	checkGolden(t, "lint_rule_catalogue", out.String())
+}
+
+func TestLintGoldenHelperKeepsPortableInstanceActions(t *testing.T) {
+	text := renderGolden(t, localHistoryProjectMissingLock(), policy.Options{Source: "dir", Rules: []string{"ENV001", "ENV002"}})
+	if !strings.Contains(text, "Next: In `/golden/local/project`, run `pixi lock`") {
+		t.Fatalf("portable project action was replaced by a generic catalogue action: %s", text)
+	}
+	historyRule, ok := policy.LookupRule("ENV001")
+	if !ok || !strings.Contains(text, "Next: "+historyRule.Fix) {
+		t.Fatalf("host-shell-dependent history action must use the portable fallback: %s", text)
+	}
+}
+
+func TestLintGoldenInstanceActions(t *testing.T) {
+	lockRule, ok := policy.LookupRule("ENV010")
+	if !ok {
+		t.Fatal("installed-lock rule is not registered")
+	}
+	projectRule, ok := policy.LookupRule("ENV002")
+	if !ok {
+		t.Fatal("project-lock rule is not registered")
+	}
+	report := policy.Report{
+		Profile: "local", RulesetVersion: policy.RulesetVersion, Status: "completed",
+		Targets: []policy.TargetReport{{ID: "file:///golden/env", Kind: "dir", PrefixCount: 1}},
+		Findings: []policy.Finding{
+			{RuleID: lockRule.ID, Target: "file:///golden/env", Severity: policy.Warning,
+				Message: "Installed numpy in `/golden/env` differs from `/golden/project/pixi.lock` (environment science, subdir linux-64). " + lockRule.Description,
+				Next:    "In a POSIX shell, run `pixi install --manifest-path '/golden/project/pixi.toml' --environment 'science'`, then repeat this check.",
+				Evidence: policy.FindingEvidence{Paths: []string{"/golden/env", "/golden/project/pixi.lock"},
+					Notes: []string{"numpy: locked 1, installed 2"}},
+			},
+			{RuleID: projectRule.ID, Target: "file:///golden/env", Severity: policy.Info,
+				Message:  "The associated project `/golden/unlocked` has no lockfile. " + projectRule.Description,
+				Evidence: policy.FindingEvidence{Paths: []string{"/golden/unlocked"}},
+			},
+		},
+		OutcomeCounts: map[policy.Status]int{policy.FindingStatus: 2},
+	}
+	var out bytes.Buffer
+	if err := renderLint(&out, report, "text", true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Next: "+report.Findings[0].Next) || strings.Contains(out.String(), lockRule.Fix) || !strings.Contains(out.String(), "Next: "+projectRule.Fix) {
+		t.Fatalf("golden must pin instance action override and catalogue fallback: %s", out.String())
+	}
+	checkGolden(t, "lint_instance_actions", out.String())
+}
+
+func goldenRecord(name, version string) inventory.CondaRecord {
+	return inventory.CondaRecord{
+		Path: "/golden/env/conda-meta/" + name + ".json", OwnershipKnown: true,
+		Record: gorattler.PrefixRecord{
+			PackageRecord: gorattler.PackageRecord{Name: name, Version: version, Build: "0", Subdir: "linux-64", SHA256: strings.Repeat("a", 64)},
+			Channel:       "conda-forge", Filename: name + "-" + version + "-0.conda",
+			URL: "https://conda.anaconda.org/conda-forge/linux-64/" + name + "-" + version + "-0.conda",
+		},
+	}
+}
+
+func localCallbackTarget(records ...inventory.CondaRecord) evidence.Target {
+	return evidence.Target{
+		ID: "file:///golden/env", Kind: "dir", Input: "/golden/env",
+		Prefixes: []evidence.Prefix{{Path: "/golden/env", Records: records, RecordCoverage: evidence.Complete}},
+		Coverage: completeCoverage("prefixes", "conda-records", "python-distributions", "host-cache", "installed-lock"),
+	}
+}
+
+func TestLintGoldenNewLocalCallbacks(t *testing.T) {
+	numpy := goldenRecord("numpy", "2")
+	unowned := localCallbackTarget(numpy)
+	unowned.Python = []evidence.PythonDistribution{{Name: "click", Version: "8", Path: "/golden/env/lib/python3.14/site-packages/click-8.dist-info/METADATA"}}
+	conflict := localCallbackTarget(numpy)
+	conflict.Python = []evidence.PythonDistribution{{Name: "numpy", Version: "3", OwnedBy: "numpy", Path: "/golden/env/lib/python3.14/site-packages/numpy-3.dist-info/METADATA"}}
+	conda := goldenRecord("conda", "26.7")
+	conda.Record.Depends = []string{"python >=3.11"}
+	base := localCallbackTarget(conda, goldenRecord("python", "3.14.0"), numpy)
+	duplicate := localCallbackTarget(numpy)
+	other := goldenRecord("numpy", "2")
+	other.Path = "/golden/other/conda-meta/numpy.json"
+	duplicate.Prefixes = append(duplicate.Prefixes, evidence.Prefix{Path: "/golden/other", Records: []inventory.CondaRecord{other}, RecordCoverage: evidence.Complete})
+	defaults := goldenRecord("python", "3.14.0")
+	defaults.Record.Channel = "https://repo.anaconda.com/pkgs/main"
+	defaults.Record.URL = "https://repo.anaconda.com/pkgs/main/linux-64/python-3.14.0-0.conda"
+	mixed := localCallbackTarget(defaults, numpy)
+	cache := localCallbackTarget(numpy)
+	cache.Archives = []evidence.Artifact{{Path: "/golden/cache/numpy-2-0.conda", Kind: "archive", Bytes: 2048}}
+	cache.Extracted = []evidence.Artifact{{Path: "/golden/cache/numpy-2-0", Kind: "extracted", Bytes: 4096}}
+	cache.CacheLinked = true
+	lock := localCallbackTarget(numpy)
+	lock.Lock = &evidence.LockComparison{Path: "/golden/project/pixi.lock", Prefix: "/golden/env", Environment: "default", Subdir: "linux-64",
+		Report: &gorattler.SyncReport{Scope: "conda", Complete: true, Changed: []gorattler.PackageChange{{
+			Locked:    gorattler.LockedPackage{Kind: "conda", Name: "numpy", Version: "1", Build: "0", Subdir: "linux-64"},
+			Installed: gorattler.InstalledPackage{Kind: "conda", Name: "numpy", Version: "2", Build: "0", Subdir: "linux-64"},
+			Reasons:   []string{"version differs"},
+		}}},
+	}
+	unconstrained := goldenRecord("numpy", "2")
+	unconstrained.Record.RequestedSpec = "numpy"
+	var out strings.Builder
+	for _, test := range []struct {
+		id     string
+		target evidence.Target
+	}{
+		{"ENV003", unowned}, {"ENV004", conflict}, {"ENV005", base}, {"ENV006", duplicate},
+		{"ENV007", mixed}, {"ENV008", cache}, {"ENV009", localCallbackTarget(goldenRecord("python", "3.10.16"))},
+		{"ENV010", lock}, {"ENV012", localCallbackTarget(unconstrained)},
+	} {
+		text := renderGolden(t, evidence.Snapshot{Started: goldenTime, Targets: []evidence.Target{test.target}}, policy.Options{Source: "dir", Rules: []string{test.id}})
+		rule, ok := policy.LookupRule(test.id)
+		if !ok {
+			t.Fatalf("new rule %s is not registered", test.id)
+		}
+		for _, want := range []string{test.id + " ", "Found:", rule.Description, "Evidence: /golden/", "Next: " + rule.Fix} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s golden lacks what/why/path/next %q: %s", test.id, want, text)
+			}
+		}
+		out.WriteString(text)
+		out.WriteByte('\n')
+	}
+	checkGolden(t, "lint_local_callbacks", out.String())
 }

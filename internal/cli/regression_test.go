@@ -35,7 +35,7 @@ func condaRoot(t *testing.T) string {
 	if err := os.MkdirAll(meta, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(`{"name":"pkg","version":"1"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(canonicalPrefixRecord("pkg", "1", "0")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return root
@@ -105,7 +105,7 @@ func TestListRulesRejectsExplicitFlagsWithoutOutput(t *testing.T) {
 	for _, flag := range [][]string{
 		{"--source", "dir"}, {"--platform", "linux/amd64"}, {"--output-dir", "x"},
 		{"--profile", "local"}, {"--fail-on", "warning"}, {"--config", "missing.json"},
-		{"--runtime-prefix", "/app"}, {"--project", "."}, {"--rule", "EC001"}, {"--disable-rule", "EC001"},
+		{"--runtime-prefix", "/app"}, {"--project", "."}, {"--rule", "ENV001"}, {"--disable-rule", "ENV001"},
 	} {
 		stdout, _, err := runCLI(t, context.Background(), append([]string{"lint", "--list-rules"}, flag...)...)
 		if ExitCode(err) != 2 || stdout != "" {
@@ -171,7 +171,7 @@ func TestScanJSONPartialFailureRendersBeforeError(t *testing.T) {
 	if err := os.MkdirAll(good, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(good, "pkg.json"), []byte(`{"name":"pkg","version":"1"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(good, "pkg.json"), []byte(canonicalPrefixRecord("pkg", "1", "0")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Discovery confirms a prefix by its directory alone; this record is parsed and
@@ -226,7 +226,7 @@ func TestScanJSONPartialFailureRendersBeforeError(t *testing.T) {
 
 func TestScanJSONImageIncludesIdentityAndWritesWholeImageSBOM(t *testing.T) {
 	archive := testimage.Archive(t, []testimage.Entry{
-		{Name: "opt/conda/conda-meta/python.json", Data: `{"name":"python","version":"3.12","build":"0","subdir":"linux-64"}`},
+		{Name: "opt/conda/conda-meta/python.json", Data: canonicalPrefixRecord("python", "3.12", "0")},
 	})
 	t.Chdir(t.TempDir())
 	stdout, _, err := runCLI(t, context.Background(), "scan", "--source", "oci-archive", "--platform", "linux/amd64", "--format", "json", archive)
@@ -369,7 +369,7 @@ func TestFindLocalCancelledBeforeWalkReturnsNoReport(t *testing.T) {
 func TestOutputDirEmptyRejectedBeforeArtifacts(t *testing.T) {
 	workdir := t.TempDir()
 	t.Chdir(workdir)
-	archive := testimage.Archive(t, []testimage.Entry{{Name: "opt/conda/conda-meta/python.json", Data: `{"name":"python","version":"3.12","build":"0"}`}})
+	archive := testimage.Archive(t, []testimage.Entry{{Name: "opt/conda/conda-meta/python.json", Data: canonicalPrefixRecord("python", "3.12", "0")}})
 	for _, args := range [][]string{
 		{"scan", "--output-dir", "", condaRoot(t)},
 		{"scan", "--source", "oci-archive", "--platform", "linux/amd64", "--output-dir", "", archive},

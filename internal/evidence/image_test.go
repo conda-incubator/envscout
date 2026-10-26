@@ -38,7 +38,11 @@ func loadEvidenceImage(t *testing.T, layers ...[]testimage.Entry) *imageinput.Lo
 }
 
 func packageMarker(p, name string) testimage.Entry {
-	return testimage.Entry{Name: p, Data: fmt.Sprintf(`{"name":%q,"version":"1.0"}`, name)}
+	data := fmt.Sprintf(`{"name":%q,"version":"1.0","build":"0","build_number":0,"subdir":"linux-64"}`, name)
+	if strings.Contains(p, "/conda-meta/") {
+		data = strings.TrimSuffix(data, "}") + fmt.Sprintf(`,"fn":%q,"url":%q}`, name+"-1.0-0.conda", "https://example.com/linux-64/"+name+"-1.0-0.conda")
+	}
+	return testimage.Entry{Name: p, Data: data}
 }
 func commandEntry(p string) testimage.Entry {
 	return testimage.Entry{Name: p, Data: "\x7fELFfixture", Mode: 0o755}
@@ -63,10 +67,10 @@ func TestImageLayouts(t *testing.T) {
 	}{
 		{"app-only", []testimage.Entry{packageMarker("app/conda-meta/python.json", "python")}, 1, 0, 0, 0, false},
 		{"app-in-base", []testimage.Entry{packageMarker("opt/base/conda-meta/python.json", "python")}, 1, 0, 0, 0, false},
-		{"base-app-cache", []testimage.Entry{packageMarker("opt/conda/conda-meta/not-a-tool-name.json", "conda"), packageMarker("opt/conda/envs/app/conda-meta/python.json", "python"), {Name: "opt/conda/pkgs/python.conda", Data: "not parsed"}, packageMarker("opt/conda/pkgs/python-1.0/info/index.json", "python"), commandEntry("usr/bin/apt")}, 2, 1, 1, 1, true},
+		{"base-app-cache", []testimage.Entry{packageMarker("opt/conda/conda-meta/not-a-tool-name.json", "conda"), packageMarker("opt/conda/envs/app/conda-meta/python.json", "python"), {Name: "opt/conda/pkgs/python-1.0-0.conda", Data: "not parsed"}, packageMarker("opt/conda/pkgs/python-1.0/info/index.json", "python"), commandEntry("usr/bin/apt")}, 2, 1, 1, 1, true},
 		{"cache-fake", []testimage.Entry{packageMarker("app/conda-meta/python.json", "python"), {Name: "tmp/pkgs/python.conda", Data: "fake"}, {Name: "opt/base/bin/conda", Data: "fake"}, {Name: "tmp/pkgs/site-packages/info/index.json", Data: "{}"}}, 1, 0, 0, 0, false},
 		{"metadata-only", []testimage.Entry{{Name: "var/lib/dpkg/status", Data: "Package: apt"}, {Name: "var/lib/rpm/rpmdb.sqlite", Data: "rpm database"}, {Name: "usr/bin/apt", Data: "not executable"}, {Name: "usr/bin/yum", Data: "not a header", Mode: 0o755}}, 0, 0, 0, 0, false},
-		{"custom-marker-cache", []testimage.Entry{packageMarker("downloads/package/info/index.json", "python"), {Name: "downloads/package.conda", Data: "archive"}}, 0, 1, 1, 0, false},
+		{"custom-marker-cache", []testimage.Entry{packageMarker("downloads/package/info/index.json", "python"), {Name: "downloads/package-1.0-0.conda", Data: "archive"}}, 0, 1, 1, 0, false},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -225,7 +229,7 @@ func TestImageRuntimeConfiguration(t *testing.T) {
 }
 
 func TestImageLayerOpaqueAndPartialPackage(t *testing.T) {
-	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("cache/pkg/info/index.json", "python"), {Name: "cache/pkg/lib/python.so", Data: "old runtime"}, {Name: "cache/pkg.conda", Data: "old archive"}}, []testimage.Entry{{Name: "cache/.wh..wh..opq"}})
+	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("cache/pkg/info/index.json", "python"), {Name: "cache/pkg/lib/python.so", Data: "old runtime"}, {Name: "cache/pkg-1.0-0.conda", Data: "old archive"}}, []testimage.Entry{{Name: "cache/.wh..wh..opq"}})
 	target := collectFixture(t, loaded, "layer-retention")
 	if len(target.Retained) != 2 {
 		t.Fatalf("opaque whiteout = %+v", target)
@@ -254,7 +258,7 @@ func TestImageHardlinkIdentityAcrossOverwrites(t *testing.T) {
 }
 
 func TestImageStableReferenceIdentity(t *testing.T) {
-	entries := []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/pkg.conda", Data: "archive"}, commandEntry("usr/bin/apt")}
+	entries := []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/pkg-1.0-0.conda", Data: "archive"}, commandEntry("usr/bin/apt")}
 	first, second := loadEvidenceImage(t, entries), loadEvidenceImage(t, entries)
 	a, b := collectFixture(t, first, "final-cache", "os-package-tools"), collectFixture(t, second, "final-cache", "os-package-tools")
 	if a.ID != b.ID || !reflect.DeepEqual(a.Archives, b.Archives) || !reflect.DeepEqual(a.Tools, b.Tools) {
@@ -263,7 +267,7 @@ func TestImageStableReferenceIdentity(t *testing.T) {
 }
 
 func TestImagePositiveLayersSurvivePartialCoverage(t *testing.T) {
-	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/pkg.conda", Data: "archive"}}, []testimage.Entry{{Name: "opt/conda/pkgs/.wh.pkg.conda"}, {Name: "unrelated", Type: tar.TypeSymlink, Link: "/missing"}})
+	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/pkg-1.0-0.conda", Data: "archive"}}, []testimage.Entry{{Name: "opt/conda/pkgs/.wh.pkg-1.0-0.conda"}, {Name: "unrelated", Type: tar.TypeSymlink, Link: "/missing"}})
 	target := collectFixture(t, loaded, "layer-retention")
 	if target.Coverage["layer-retention"] != Complete || len(target.Retained) != 1 {
 		t.Fatalf("partial discarded positive evidence: %+v", target)
@@ -292,11 +296,11 @@ func TestImageLayerCacheContextsAreAsOfLayer(t *testing.T) {
 		layers   [][]testimage.Entry
 		retained int
 	}{
-		{"not-retroactive", [][]testimage.Entry{{{Name: "downloads/user.conda", Data: "unrelated archive"}}, {{Name: "downloads/.wh.user.conda"}, packageMarker("downloads/pkg/info/index.json", "python")}}, 0},
-		{"removed-marker", [][]testimage.Entry{{packageMarker("cache/pkg/info/index.json", "python")}, {{Name: "cache/pkg/info/.wh.index.json"}}, {{Name: "cache/new.conda", Data: "not proven cache"}}, {{Name: "cache/.wh.new.conda"}}}, 1},
-		{"replaced-marker", [][]testimage.Entry{{packageMarker("cache/pkg/info/index.json", "python")}, {{Name: "cache/pkg/info/index.json", Data: "{}"}}, {{Name: "cache/new.conda", Data: "not proven cache"}}, {{Name: "cache/.wh.new.conda"}}}, 1},
-		{"removed-tooling", [][]testimage.Entry{{packageMarker("opt/conda/conda-meta/conda.json", "conda")}, {{Name: "opt/conda/conda-meta/.wh.conda.json"}}, {{Name: "opt/conda/pkgs/new.conda", Data: "not proven cache"}}, {{Name: "opt/conda/pkgs/.wh.new.conda"}}}, 0},
-		{"surviving-marker", [][]testimage.Entry{{packageMarker("cache/pkg/info/index.json", "python")}, {{Name: "cache/new.conda", Data: "real cache"}}, {{Name: "cache/.wh.new.conda"}}}, 1},
+		{"not-retroactive", [][]testimage.Entry{{{Name: "downloads/user-1.0-0.conda", Data: "unrelated archive"}}, {{Name: "downloads/.wh.user-1.0-0.conda"}, packageMarker("downloads/pkg/info/index.json", "python")}}, 0},
+		{"removed-marker", [][]testimage.Entry{{packageMarker("cache/pkg/info/index.json", "python")}, {{Name: "cache/pkg/info/.wh.index.json"}}, {{Name: "cache/new-1.0-0.conda", Data: "not proven cache"}}, {{Name: "cache/.wh.new-1.0-0.conda"}}}, 1},
+		{"replaced-marker", [][]testimage.Entry{{packageMarker("cache/pkg/info/index.json", "python")}, {{Name: "cache/pkg/info/index.json", Data: "{}"}}, {{Name: "cache/new-1.0-0.conda", Data: "not proven cache"}}, {{Name: "cache/.wh.new-1.0-0.conda"}}}, 1},
+		{"removed-tooling", [][]testimage.Entry{{packageMarker("opt/conda/conda-meta/conda.json", "conda")}, {{Name: "opt/conda/conda-meta/.wh.conda.json"}}, {{Name: "opt/conda/pkgs/new-1.0-0.conda", Data: "not proven cache"}}, {{Name: "opt/conda/pkgs/.wh.new-1.0-0.conda"}}}, 0},
+		{"surviving-marker", [][]testimage.Entry{{packageMarker("cache/pkg/info/index.json", "python")}, {{Name: "cache/new-1.0-0.conda", Data: "real cache"}}, {{Name: "cache/.wh.new-1.0-0.conda"}}}, 1},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -306,7 +310,7 @@ func TestImageLayerCacheContextsAreAsOfLayer(t *testing.T) {
 				t.Fatalf("layer-relative cache context=%+v", target)
 			}
 			for _, artifact := range target.Retained {
-				if strings.HasSuffix(artifact.Path, "new.conda") && test.name != "surviving-marker" {
+				if strings.HasSuffix(artifact.Path, "new-1.0-0.conda") && test.name != "surviving-marker" {
 					t.Fatalf("stale marker confirmed new archive=%+v", artifact)
 				}
 			}
@@ -393,12 +397,12 @@ func TestImageOverwrittenHardlinkIntermediateRemainsUnknown(t *testing.T) {
 }
 
 func TestImageUnrelatedHardlinksAndPositiveRetention(t *testing.T) {
-	loaded := loadEvidenceImage(t, []testimage.Entry{commandEntry("usr/bin/perl"), {Name: "usr/bin/perl-alias", Type: tar.TypeLink, Link: "usr/bin/perl"}}, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/archive.conda", Data: "archive"}}, []testimage.Entry{{Name: "opt/conda/pkgs/.wh.archive.conda"}})
+	loaded := loadEvidenceImage(t, []testimage.Entry{commandEntry("usr/bin/perl"), {Name: "usr/bin/perl-alias", Type: tar.TypeLink, Link: "usr/bin/perl"}}, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/archive-1.0-0.conda", Data: "archive"}}, []testimage.Entry{{Name: "opt/conda/pkgs/.wh.archive-1.0-0.conda"}})
 	target := collectFixture(t, loaded, "cache-link-dependencies", "layer-retention")
 	if len(target.Retained) != 1 || target.Coverage["layer-retention"] != Complete || target.Coverage["cache-link-dependencies"] != Complete {
 		t.Fatalf("unrelated hardlink poisoned cache coverage=%+v", target)
 	}
-	loaded = loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/archive.conda", Data: "archive"}, {Name: "opt/conda/pkgs/ambiguous", Data: "runtime"}, {Name: "app/runtime", Type: tar.TypeLink, Link: "opt/conda/pkgs/ambiguous"}, {Name: "opt/conda/pkgs/broken", Type: tar.TypeSymlink, Link: "missing"}}, []testimage.Entry{{Name: "opt/conda/pkgs/.wh.archive.conda"}})
+	loaded = loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/archive-1.0-0.conda", Data: "archive"}, {Name: "opt/conda/pkgs/ambiguous", Data: "runtime"}, {Name: "app/runtime", Type: tar.TypeLink, Link: "opt/conda/pkgs/ambiguous"}, {Name: "opt/conda/pkgs/broken", Type: tar.TypeSymlink, Link: "missing"}}, []testimage.Entry{{Name: "opt/conda/pkgs/.wh.archive-1.0-0.conda"}})
 	target = collectFixture(t, loaded, "cache-link-dependencies", "layer-retention")
 	if len(target.Retained) != 1 || target.Coverage["layer-retention"] != Partial || target.Coverage["cache-link-dependencies"] != Partial {
 		t.Fatalf("partial cache identity erased independent archive=%+v", target)
@@ -479,11 +483,11 @@ func TestImageArtifactAndIssueLimits(t *testing.T) {
 func TestImageLayerOverwriteAndWhiteout(t *testing.T) {
 	for _, removed := range []bool{false, true} {
 		t.Run(fmt.Sprint(removed), func(t *testing.T) {
-			second := []testimage.Entry{{Name: "opt/conda/pkgs/pkg.conda", Data: "new archive"}}
+			second := []testimage.Entry{{Name: "opt/conda/pkgs/pkg-1.0-0.conda", Data: "new archive"}}
 			if removed {
-				second = []testimage.Entry{{Name: "opt/conda/pkgs/.wh.pkg.conda"}}
+				second = []testimage.Entry{{Name: "opt/conda/pkgs/.wh.pkg-1.0-0.conda"}}
 			}
-			loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/pkg.conda", Data: "old archive"}}, second)
+			loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/pkg-1.0-0.conda", Data: "old archive"}}, second)
 			target := collectFixture(t, loaded, "layer-retention")
 			if len(target.Retained) != 1 {
 				t.Fatalf("retained = %+v", target)
@@ -610,7 +614,7 @@ func TestImageLayerPackagePayloadAddedAfterMarker(t *testing.T) {
 }
 
 func TestImagePartialMetadataKeepsPositiveEvidence(t *testing.T) {
-	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/pkg.conda", Data: "archive"}, {Name: "opt/conda/pkgs/broken/info/index.json", Data: strings.Repeat("x", imageMetadataLimit+1)}})
+	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/pkg-1.0-0.conda", Data: "archive"}, {Name: "opt/conda/pkgs/broken/info/index.json", Data: strings.Repeat("x", imageMetadataLimit+1)}})
 	target := collectFixture(t, loaded, "final-cache", "tooling-prefix", "os-package-tools")
 	if len(target.Archives) != 1 || target.Coverage["final-cache"] != Partial || target.Coverage["tooling-prefix"] != Complete || target.Coverage["os-package-tools"] != Complete {
 		t.Fatalf("partial positive = %+v", target)
@@ -686,10 +690,10 @@ func (catalog *openCountCatalog) Open(ref file.Reference) (io.ReadCloser, error)
 }
 
 func TestImageFinalRecordsParsedOnce(t *testing.T) {
-	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), packageMarker("opt/conda/envs/app/conda-meta/python.json", "python"), {Name: "opt/conda/pkgs/pkg.conda", Data: "archive"}})
+	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), packageMarker("opt/conda/envs/app/conda-meta/python.json", "python"), {Name: "opt/conda/pkgs/pkg-1.0-0.conda", Data: "archive"}})
 	counter := &openCountCatalog{FileCatalogReader: loaded.Image.FileCatalog, opens: map[string]int{}}
 	loaded.Image.FileCatalog = counter
-	// Final records are parsed exactly once by the conda cataloger. Layer retention reads
+	// Final records are parsed exactly once by the canonical reader. Layer retention reads
 	// historical layer markers separately, so it is excluded from this final-view count.
 	target := collectFixture(t, loaded, "prefixes", "tooling-prefix", "final-cache", "runtime-config")
 	if len(target.Prefixes) != 2 || target.Coverage["prefixes"] != Complete {
@@ -719,10 +723,60 @@ func TestImageMalformedPlusValidRecordsKeepPositivePrefix(t *testing.T) {
 	if len(target.Prefixes) != 1 || target.Prefixes[0].Path != "/app" {
 		t.Fatalf("positive prefix lost: %+v", target.Prefixes)
 	}
+	if len(target.Prefixes[0].Records) != 1 || target.Prefixes[0].RecordCoverage != Partial {
+		t.Fatalf("canonical partial records lost: %+v", target.Prefixes[0])
+	}
+}
+
+func TestImageCanonicalRecordsAndArchiveFilenames(t *testing.T) {
+	marker := packageMarker("app/conda-meta/python.json", "python")
+	marker.Data = strings.TrimSuffix(marker.Data, "}") + `,"extracted_package_dir":"/cache/python-1.0-0","files":["bin/python"],"requested_specs":["python >=1"]}`
+	loaded := loadEvidenceImage(t, []testimage.Entry{
+		marker,
+		{Name: "cache", Type: tar.TypeDir},
+		{Name: "cache/python-1.0-0.conda", Data: "archive"},
+		{Name: "cache/python-1.0-0.tar.bz2", Data: "archive"},
+		{Name: "cache/arbitrary.tar.bz2", Data: "not a package"},
+		{Name: "cache/renamed.conda", Data: "not a canonical filename"},
+	})
+	target := collectFixture(t, loaded, "prefixes", "conda-records", "final-cache")
+	if len(target.Archives) != 2 || len(target.Prefixes) != 1 {
+		t.Fatalf("canonical package archive classification=%+v", target)
+	}
+	prefix := target.Prefixes[0]
+	if prefix.RecordCoverage != Complete || len(prefix.Records) != 1 || prefix.Records[0].Path != "/app/conda-meta/python.json" || len(prefix.Records[0].Record.Files) != 1 || len(prefix.Records[0].Record.RequestedSpecs) != 1 {
+		t.Fatalf("canonical fields and source location not retained: %+v", prefix)
+	}
+}
+
+func TestImageIndexParserDoesNotRequirePrefixFields(t *testing.T) {
+	loaded := loadEvidenceImage(t, []testimage.Entry{
+		packageMarker("cache/pkg/info/index.json", "python"),
+		{Name: "cache/pkg/data", Data: "payload"},
+		{Name: "cache/sparse/info/index.json", Data: `{"name":"sparse","version":"1.0"}`},
+	})
+	target := collectFixture(t, loaded, "final-cache", "layer-retention")
+	if len(target.Extracted) != 1 || target.Extracted[0].Path != "/cache/pkg" || target.Coverage["final-cache"] != Partial {
+		t.Fatalf("canonical index parse must reject sparse but accept index without fn/url: %+v", target)
+	}
+}
+
+func TestImageRecordTarballAndLinkCacheRoots(t *testing.T) {
+	for _, field := range []string{`"package_tarball_full_path":"/cache/python-1.0-0.conda"`, `"link":{"source":"/cache/python-1.0-0","type":1}`} {
+		t.Run(field, func(t *testing.T) {
+			marker := packageMarker("app/conda-meta/python.json", "python")
+			marker.Data = strings.TrimSuffix(marker.Data, "}") + "," + field + "}"
+			loaded := loadEvidenceImage(t, []testimage.Entry{marker, {Name: "cache", Type: tar.TypeDir}, {Name: "cache/python-1.0-0.conda", Data: "archive"}})
+			target := collectFixture(t, loaded, "final-cache")
+			if len(target.Archives) != 1 || target.Archives[0].Path != "/cache/python-1.0-0.conda" {
+				t.Fatalf("canonical record cache source lost: %+v", target)
+			}
+		})
+	}
 }
 
 func TestImageExtractedPackageDirRootMustExistInImage(t *testing.T) {
-	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/pkg.conda", Data: "archive"}})
+	loaded := loadEvidenceImage(t, []testimage.Entry{packageMarker("opt/conda/conda-meta/conda.json", "conda"), {Name: "opt/conda/pkgs/pkg-1.0-0.conda", Data: "archive"}})
 	target := collectFixture(t, loaded, "final-cache")
 	if len(target.Issues) != 0 {
 		t.Fatalf("absent build-host cache produced issues: %+v", target.Issues)

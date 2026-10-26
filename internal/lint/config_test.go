@@ -18,11 +18,11 @@ func TestReadConfigValid(t *testing.T) {
 		"profile": "container-runtime",
 		"fail_on": "warning",
 		"rules": {
-			"EC001": {"enabled": true, "severity": "info", "revision_threshold": 12},
-			"IC004": {"enabled": false}
+			"ENV001": {"enabled": true, "severity": "info", "revision_threshold": 12},
+			"IMG004": {"enabled": false}
 		},
 		"suppressions": [{
-			"rule": "IC001",
+			"rule": "IMG001",
 			"target": "oci:sha256:example/linux/amd64",
 			"path": "/opt/conda/pkgs",
 			"fingerprint": "`+strings.Repeat("a", 64)+`",
@@ -37,11 +37,11 @@ func TestReadConfigValid(t *testing.T) {
 	want := Policy{
 		Version: 1, Profile: "container-runtime", FailOn: Warning,
 		Rules: map[string]RuleOptions{
-			"EC001": {Enabled: new(true), Severity: Info, RevisionThreshold: new(12)},
-			"IC004": {Enabled: new(false)},
+			"ENV001": {Enabled: new(true), Severity: Info, RevisionThreshold: new(12)},
+			"IMG004": {Enabled: new(false)},
 		},
 		Suppressions: []Suppression{{
-			Rule: "IC001", Target: "oci:sha256:example/linux/amd64", Path: "/opt/conda/pkgs",
+			Rule: "IMG001", Target: "oci:sha256:example/linux/amd64", Path: "/opt/conda/pkgs",
 			Fingerprint: strings.Repeat("a", 64), Reason: "Intentional offline package cache", Expires: "2028-02-29",
 		}},
 	}
@@ -84,20 +84,20 @@ func TestReadConfigRejectsInvalidJSON(t *testing.T) {
 		{"transient source", `{"version":1,"source":"dir"}`, "unknown field"},
 		{"transient runtime prefix", `{"version":1,"runtime_prefix":"/opt/conda"}`, "unknown field"},
 		{"transient project", `{"version":1,"project":"/missing/project"}`, "unknown field"},
-		{"unknown rule field", `{"version":1,"rules":{"EC001":{"unexpected":true}}}`, "unknown field"},
-		{"threshold wrong name", `{"version":1,"rules":{"EC001":{"revisionThreshold":10}}}`, "unknown field"},
-		{"unknown suppression field", `{"version":1,"suppressions":[{"rule":"EC001","target":"x","reason":"reviewed","unexpected":1}]}`, "unknown field"},
+		{"unknown rule field", `{"version":1,"rules":{"ENV001":{"unexpected":true}}}`, "unknown field"},
+		{"threshold wrong name", `{"version":1,"rules":{"ENV001":{"revisionThreshold":10}}}`, "unknown field"},
+		{"unknown suppression field", `{"version":1,"suppressions":[{"rule":"ENV001","target":"x","reason":"reviewed","unexpected":1}]}`, "unknown field"},
 		{"trailing object", `{"version":1} {"version":1}`, "trailing JSON"},
 		{"trailing array", `{"version":1} []`, "trailing JSON"},
 		{"trailing null", `{"version":1} null`, "trailing JSON"},
 		{"trailing scalar", `{"version":1} 2`, "trailing JSON"},
 		{"trailing garbage", `{"version":1} garbage`, "trailing JSON"},
-		{"fractional threshold", `{"version":1,"rules":{"EC001":{"revision_threshold":1.5}}}`, "decode lint config"},
-		{"decimal threshold", `{"version":1,"rules":{"EC001":{"revision_threshold":10.0}}}`, "decode lint config"},
-		{"exponent threshold", `{"version":1,"rules":{"EC001":{"revision_threshold":1e1}}}`, "decode lint config"},
-		{"string threshold", `{"version":1,"rules":{"EC001":{"revision_threshold":"10"}}}`, "decode lint config"},
-		{"overflow threshold", `{"version":1,"rules":{"EC001":{"revision_threshold":999999999999999999999999999999}}}`, "decode lint config"},
-		{"nonboolean enabled", `{"version":1,"rules":{"EC001":{"enabled":0}}}`, "decode lint config"},
+		{"fractional threshold", `{"version":1,"rules":{"ENV001":{"revision_threshold":1.5}}}`, "decode lint config"},
+		{"decimal threshold", `{"version":1,"rules":{"ENV001":{"revision_threshold":10.0}}}`, "decode lint config"},
+		{"exponent threshold", `{"version":1,"rules":{"ENV001":{"revision_threshold":1e1}}}`, "decode lint config"},
+		{"string threshold", `{"version":1,"rules":{"ENV001":{"revision_threshold":"10"}}}`, "decode lint config"},
+		{"overflow threshold", `{"version":1,"rules":{"ENV001":{"revision_threshold":999999999999999999999999999999}}}`, "decode lint config"},
+		{"nonboolean enabled", `{"version":1,"rules":{"ENV001":{"enabled":0}}}`, "decode lint config"},
 		{"rule array", `{"version":1,"rules":[]}`, "decode lint config"},
 		{"suppression object", `{"version":1,"suppressions":{}}`, "decode lint config"},
 	} {
@@ -116,8 +116,8 @@ func TestReadConfigRejectsInvalidJSON(t *testing.T) {
 func TestReadConfigOptionalFieldsAndExactSelectors(t *testing.T) {
 	for _, data := range []string{
 		" \n\t" + `{"version":1}` + "\r\n\t ",
-		`{"version":1,"rules":{"EC001":{},"IC001":{}},"suppressions":[]}`,
-		`{"version":1,"suppressions":[{"rule":"EC001","path":"../nonexistent/\u00e9/\u73af\u5883","reason":"Review accepted"},{"rule":"EC001","target":"C:\\nonexistent\\env","reason":"Review accepted","expires":"2000-01-01"}]}`,
+		`{"version":1,"rules":{"ENV001":{},"IMG001":{}},"suppressions":[]}`,
+		`{"version":1,"suppressions":[{"rule":"ENV001","path":"../nonexistent/\u00e9/\u73af\u5883","reason":"Review accepted"},{"rule":"ENV001","target":"C:\\nonexistent\\env","reason":"Review accepted","expires":"2000-01-01"}]}`,
 	} {
 		policy, err := ReadConfig(writeLintConfig(t, data))
 		if err != nil {
@@ -134,16 +134,16 @@ func TestReadConfigAcceptsEscapedCanonicalKeys(t *testing.T) {
 		"\u0076ersion":1,
 		"\u0070rofile":"local",
 		"\u0066ail_on":"warning",
-		"\u0072ules":{"\u0045C001":{"\u0065nabled":true,"\u0073everity":"info","\u0072evision_threshold":10}},
-		"\u0073uppressions":[{"\u0072ule":"EC001","\u0070ath":"/env","\u0072eason":"reviewed"}]
+		"\u0072ules":{"\u0045NV001":{"\u0065nabled":true,"\u0073everity":"info","\u0072evision_threshold":10}},
+		"\u0073uppressions":[{"\u0072ule":"ENV001","\u0070ath":"/env","\u0072eason":"reviewed"}]
 	}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if policy.FailOn != "warning" || policy.Rules["EC001"].Enabled == nil || !*policy.Rules["EC001"].Enabled || policy.Suppressions[0].Reason != "reviewed" {
+	if policy.FailOn != "warning" || policy.Rules["ENV001"].Enabled == nil || !*policy.Rules["ENV001"].Enabled || policy.Suppressions[0].Reason != "reviewed" {
 		t.Fatalf("escaped canonical keys decoded incorrectly: %+v", policy)
 	}
-	if _, err := ReadConfig(writeLintConfig(t, `{"version":1,"rules":{"ec001":{}}}`)); err == nil || !strings.Contains(err.Error(), "unknown rule ID") {
+	if _, err := ReadConfig(writeLintConfig(t, `{"version":1,"rules":{"env001":{}}}`)); err == nil || !strings.Contains(err.Error(), "unknown rule ID") {
 		t.Fatalf("case-sensitive rule ID validation bypassed: %v", err)
 	}
 }
@@ -159,6 +159,26 @@ func TestPolicyExecutionInputsAreNotConfigJSON(t *testing.T) {
 	}
 }
 
+func TestLegacyRuleIDsAreRejectedWithoutAliases(t *testing.T) {
+	for _, id := range []string{"EC001", "EC002", "EC003", "EC004", "IC001", "IC002", "IC003", "IC004", "IC005", "IC006", "IC007"} {
+		t.Run(id, func(t *testing.T) {
+			for _, data := range []string{
+				fmt.Sprintf(`{"version":1,"rules":{%q:{}}}`, id),
+				fmt.Sprintf(`{"version":1,"suppressions":[{"rule":%q,"path":"/env","reason":"reviewed"}]}`, id),
+			} {
+				if policy, err := ReadConfig(writeLintConfig(t, data)); err == nil || !strings.Contains(err.Error(), "unknown rule") || !reflect.DeepEqual(policy, Policy{}) {
+					t.Errorf("legacy config ID accepted or returned partial policy: %+v %v", policy, err)
+				}
+			}
+			for _, options := range []Options{{Rules: []string{id}}, {DisableRules: []string{id}}} {
+				if _, err := BuildPolicy(Policy{}, options); err == nil || !strings.Contains(err.Error(), "unknown lint rule") {
+					t.Errorf("legacy CLI ID accepted: %+v %v", options, err)
+				}
+			}
+		})
+	}
+}
+
 func TestValidateConfig(t *testing.T) {
 	for _, tt := range []struct {
 		name, message string
@@ -167,14 +187,14 @@ func TestValidateConfig(t *testing.T) {
 		{"version", "version", func(p *Policy) { p.Version = 2 }},
 		{"profile", "profile", func(p *Policy) { p.Profile = "production" }},
 		{"fail_on", "fail_on", func(p *Policy) { p.FailOn = Severity("critical") }},
-		{"unknown rule", "unknown rule", func(p *Policy) { p.Rules["EC999"] = RuleOptions{} }},
-		{"lowercase rule", "unknown rule", func(p *Policy) { p.Rules["ec001"] = RuleOptions{} }},
-		{"severity", "severity", func(p *Policy) { p.Rules["EC001"] = RuleOptions{Severity: NoFailure} }},
-		{"zero threshold", "revision_threshold", func(p *Policy) { p.Rules["EC001"] = RuleOptions{RevisionThreshold: new(0)} }},
-		{"negative threshold", "revision_threshold", func(p *Policy) { p.Rules["EC001"] = RuleOptions{RevisionThreshold: new(-1)} }},
-		{"large threshold", "revision_threshold", func(p *Policy) { p.Rules["EC001"] = RuleOptions{RevisionThreshold: new(1_000_001)} }},
-		{"wrong threshold rule", "only supported", func(p *Policy) { p.Rules["IC001"] = RuleOptions{RevisionThreshold: new(10)} }},
-		{"unknown suppression rule", "unknown rule", func(p *Policy) { p.Suppressions[0].Rule = "IC999" }},
+		{"unknown rule", "unknown rule", func(p *Policy) { p.Rules["ENV999"] = RuleOptions{} }},
+		{"lowercase rule", "unknown rule", func(p *Policy) { p.Rules["env001"] = RuleOptions{} }},
+		{"severity", "severity", func(p *Policy) { p.Rules["ENV001"] = RuleOptions{Severity: NoFailure} }},
+		{"zero threshold", "revision_threshold", func(p *Policy) { p.Rules["ENV001"] = RuleOptions{RevisionThreshold: new(0)} }},
+		{"negative threshold", "revision_threshold", func(p *Policy) { p.Rules["ENV001"] = RuleOptions{RevisionThreshold: new(-1)} }},
+		{"large threshold", "revision_threshold", func(p *Policy) { p.Rules["ENV001"] = RuleOptions{RevisionThreshold: new(1_000_001)} }},
+		{"wrong threshold rule", "only supported", func(p *Policy) { p.Rules["IMG001"] = RuleOptions{RevisionThreshold: new(10)} }},
+		{"unknown suppression rule", "unknown rule", func(p *Policy) { p.Suppressions[0].Rule = "IMG999" }},
 		{"missing suppression rule", "unknown rule", func(p *Policy) { p.Suppressions[0].Rule = "" }},
 		{"missing reason", "reason is required", func(p *Policy) { p.Suppressions[0].Reason = "" }},
 		{"blank reason", "reason is required", func(p *Policy) { p.Suppressions[0].Reason = " \u00a0 " }},
@@ -232,15 +252,15 @@ func TestValidateConfigValidValues(t *testing.T) {
 	}
 	for _, threshold := range []int{1, 1_000_000} {
 		policy := validLintPolicy()
-		policy.Rules["EC001"] = RuleOptions{RevisionThreshold: new(threshold)}
+		policy.Rules["ENV001"] = RuleOptions{RevisionThreshold: new(threshold)}
 		if err := ValidateConfig(policy); err != nil {
 			t.Fatalf("valid threshold %d: %v", threshold, err)
 		}
 	}
 	for _, selector := range []Suppression{
-		{Rule: "EC001", Target: "missing target", Reason: "reviewed"},
-		{Rule: "EC001", Path: "missing path", Reason: "reviewed"},
-		{Rule: "EC001", Fingerprint: strings.Repeat("AB", 32), Reason: "reviewed"},
+		{Rule: "ENV001", Target: "missing target", Reason: "reviewed"},
+		{Rule: "ENV001", Path: "missing path", Reason: "reviewed"},
+		{Rule: "ENV001", Fingerprint: strings.Repeat("AB", 32), Reason: "reviewed"},
 	} {
 		policy := Policy{Version: 1, Suppressions: []Suppression{selector}}
 		if err := ValidateConfig(policy); err != nil {
@@ -251,7 +271,7 @@ func TestValidateConfigValidValues(t *testing.T) {
 	policy.Suppressions = make([]Suppression, maxConfigSuppressions)
 	for i := range policy.Suppressions {
 		policy.Suppressions[i] = Suppression{
-			Rule: "EC001", Path: "/missing/environment",
+			Rule: "ENV001", Path: "/missing/environment",
 			Reason: strings.Repeat("x", 2048), Expires: "2028-02-29",
 		}
 	}
@@ -318,9 +338,9 @@ func validLintPolicy() Policy {
 	return Policy{
 		Version: 1,
 		Rules: map[string]RuleOptions{
-			"EC001": {Severity: "info", RevisionThreshold: new(10)},
+			"ENV001": {Severity: "info", RevisionThreshold: new(10)},
 		},
-		Suppressions: []Suppression{{Rule: "EC001", Target: "file:/missing/environment", Reason: "reviewed"}},
+		Suppressions: []Suppression{{Rule: "ENV001", Target: "file:/missing/environment", Reason: "reviewed"}},
 	}
 }
 
