@@ -1,12 +1,14 @@
-Lint | profile container-distroless | ruleset 3
+Lint | profile container-distroless | ruleset 4
 Target: oci-archive:golden-image (1 prefixes)
+Check ENV013 unknown: prefix discovery or conda record coverage is incomplete
 Check IMG001 unknown: required final-cache coverage is not complete; absence was not established
 Check IMG002 unknown: required final-cache coverage is not complete; absence was not established
 Check IMG003 unknown: prefix roles or runtime configuration could not be completely inspected
 Check IMG004 unknown: required layer-retention coverage is not complete; absence was not established
 Check IMG005 unknown: required os-package-tools coverage is not complete; absence was not established
 Check IMG006 unknown: required shell-tools coverage is not complete; absence was not established
-Summary: incomplete; 1 targets; 0 findings; 6 unknown
+Summary: incomplete; 1 targets; 0 findings; 7 unknown
+Inspection issue: oci-archive:golden-image: required evidence coverage is not complete
 Inspection issue: oci-archive:golden-image: required evidence coverage is not complete
 Inspection issue: oci-archive:golden-image: required evidence coverage is not complete
 Inspection issue: oci-archive:golden-image: required evidence coverage is not complete

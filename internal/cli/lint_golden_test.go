@@ -33,8 +33,10 @@ var goldenTarget = imageinput.Identity{
 
 const goldenTargetID = "oci-archive:golden-image"
 
+// goldenPrefix builds an image prefix whose conda records are fully inspected.
+// Golden image prefixes carry no record payload, so record coverage is Complete.
 func goldenPrefix(id string, revision *int) evidence.Prefix {
-	return evidence.Prefix{Path: "/" + id, Revision: revision}
+	return evidence.Prefix{Path: "/" + id, Revision: revision, RecordCoverage: evidence.Complete}
 }
 
 func intPtr(v int) *int { return &v }
@@ -66,7 +68,7 @@ func renderGoldenWithConfig(t *testing.T, snapshot evidence.Snapshot, config pol
 	// fallback here; dedicated renderer tests exercise instance-action overrides.
 	image := options.Source == "oci-archive"
 	for i := range report.Findings {
-		if !image && (report.Findings[i].RuleID == "ENV001" || report.Findings[i].RuleID == "ENV010") {
+		if !image && (report.Findings[i].RuleID == "ENV001" || report.Findings[i].RuleID == "ENV010" || report.Findings[i].RuleID == "ENV013") {
 			report.Findings[i].Next = ""
 		}
 	}
@@ -151,7 +153,7 @@ func imagePrefixRolesShell() evidence.Snapshot {
 		},
 		Shells:             []evidence.Artifact{{Path: "/bin/sh", Kind: "shell", Bytes: 900000}},
 		RuntimeUsesTooling: false,
-		Coverage:           completeCoverage("prefixes", "tooling-prefix", "runtime-config", "shell-tools"),
+		Coverage:           completeCoverage("prefixes", "conda-records", "tooling-prefix", "runtime-config", "shell-tools"),
 	}
 	return evidence.Snapshot{Started: goldenTime, Targets: []evidence.Target{target}}
 }
@@ -172,7 +174,7 @@ func imageRetainedLayers() evidence.Snapshot {
 			BlobDigest: "sha256:3333333333333333333333333333333333333333333333333333333333333333",
 			LayerBytes: 512,
 		}},
-		Coverage: completeCoverage("final-cache", "cache-link-dependencies", "layer-retention", "os-package-tools", "prefixes", "tooling-prefix", "runtime-config"),
+		Coverage: completeCoverage("final-cache", "cache-link-dependencies", "conda-records", "layer-retention", "os-package-tools", "prefixes", "tooling-prefix", "runtime-config"),
 	}
 	return evidence.Snapshot{Started: goldenTime, Targets: []evidence.Target{target}}
 }
@@ -185,7 +187,7 @@ func imageSuppressedAndUnused() evidence.Snapshot {
 		ID: goldenTargetID, Kind: "oci-archive", Input: "golden-image.tar", Image: &goldenTarget,
 		Prefixes: []evidence.Prefix{goldenPrefix("opt/conda", intPtr(1))},
 		Shells:   []evidence.Artifact{{Path: "bin/sh", Kind: "shell", Bytes: 900000}},
-		Coverage: completeCoverage("shell-tools", "prefixes"),
+		Coverage: completeCoverage("shell-tools", "prefixes", "conda-records"),
 	}
 	return evidence.Snapshot{Started: goldenTime, Targets: []evidence.Target{target}}
 }
@@ -240,6 +242,28 @@ func TestLintGoldenImageSuppressedAndUnused(t *testing.T) {
 func TestLintGoldenPartialUnknown(t *testing.T) {
 	checkGolden(t, "lint_partial_unknown", renderGolden(t, partialUnknown(),
 		policy.Options{Source: "oci-archive", Profile: "container-distroless"}))
+}
+
+// caStaleCertificates: a local prefix whose conda-meta carries certifi and
+// ca-certificates from the official main channel below their verified minima.
+// Only package metadata is modelled; no certificate bundle content is read.
+func caStaleCertificates() evidence.Snapshot {
+	certifi := goldenRecord("certifi", "2026.10.19")
+	certifi.Record.Channel = "https://repo.anaconda.com/pkgs/main"
+	certifi.Record.URL = "https://repo.anaconda.com/pkgs/main/noarch/certifi-2026.10.19-0.conda"
+	certifi.Record.Subdir = "noarch"
+	ca := goldenRecord("ca-certificates", "2026.10.19")
+	ca.Record.Channel = "https://repo.anaconda.com/pkgs/main"
+	ca.Record.URL = "https://repo.anaconda.com/pkgs/main/noarch/ca-certificates-2026.10.19-0.conda"
+	ca.Record.Subdir = "noarch"
+	target := localCallbackTarget(certifi, ca)
+	target.Coverage = completeCoverage("prefixes", "conda-records")
+	return evidence.Snapshot{Started: goldenTime, Targets: []evidence.Target{target}}
+}
+
+func TestLintGoldenCACertificateStale(t *testing.T) {
+	checkGolden(t, "lint_ca_certificates_stale", renderGolden(t, caStaleCertificates(),
+		policy.Options{Source: "dir", Rules: []string{"ENV013"}}))
 }
 
 func TestLintGoldenEmptyTargets(t *testing.T) {

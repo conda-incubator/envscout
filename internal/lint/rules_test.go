@@ -72,13 +72,13 @@ func TestRegistryInvariants(t *testing.T) {
 	if len(seen) != len(registry) {
 		t.Fatalf("ListRules returned %d rules for %d registry entries", len(seen), len(registry))
 	}
-	if len(seen) != 18 || available != 17 {
-		t.Fatalf("Phase4 registry has %d total/%d available rules, want 18/17", len(seen), available)
+	if len(seen) != 19 || available != 18 {
+		t.Fatalf("Phase4 registry has %d total/%d available rules, want 19/18", len(seen), available)
 	}
 	for _, group := range []struct {
 		prefix string
 		count  int
-	}{{"ENV", 12}, {"IMG", 6}} {
+	}{{"ENV", 13}, {"IMG", 6}} {
 		for i := 1; i <= group.count; i++ {
 			if !seen[fmt.Sprintf("%s%03d", group.prefix, i)] {
 				t.Errorf("missing contiguous Phase4 rule %s%03d", group.prefix, i)
@@ -88,6 +88,34 @@ func TestRegistryInvariants(t *testing.T) {
 	for _, id := range []string{"EC001", "EC002", "EC003", "EC004", "IC001", "IC002", "IC003", "IC004", "IC005", "IC006", "IC007"} {
 		if _, ok := LookupRule(id); ok {
 			t.Errorf("legacy or removed rule %s must not be registered", id)
+		}
+	}
+}
+
+// TestENV013CABundleRuleCatalogue pins the ENV013 registry contract: available,
+// Warning in every profile, and no revision threshold.
+func TestENV013CABundleRuleCatalogue(t *testing.T) {
+	rule := mustRule(t, "ENV013")
+	if !rule.Available || rule.Check == nil {
+		t.Fatalf("ENV013 must be available with a Check: %+v", rule)
+	}
+	if rule.SupportsRevisionThreshold {
+		t.Error("ENV013 must not support a revision threshold")
+	}
+	for _, profile := range profiles {
+		if d := rule.Defaults[profile]; d.Severity != Warning || d.RevisionThreshold != nil {
+			t.Errorf("ENV013/%s default = %+v, want Warning without threshold", profile, d)
+		}
+	}
+	for _, phrase := range []string{"certifi", "ca-certificates", "2026.10.19", "2026.10.20"} {
+		if !strings.Contains(rule.Description+" "+rule.Fix+" "+strings.Join(rule.Exceptions, " "), phrase) {
+			t.Errorf("ENV013 catalogue lacks verified minimum or scope %q", phrase)
+		}
+	}
+	joined := strings.ToLower(rule.Description + " " + strings.Join(rule.Exceptions, " "))
+	for _, guarantee := range []string{"is vulnerable", "is secure", "guarantees", "trusted at runtime", "runtime trust"} {
+		if strings.Contains(joined, guarantee) {
+			t.Errorf("ENV013 must not claim %q", guarantee)
 		}
 	}
 }

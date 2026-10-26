@@ -121,6 +121,20 @@ ENV012  Requested packages have no version constraint
     A version range is a constraint even when it is not an exact version/build pin; this check does not prove installed drift.
     If a record has several requested specs, any unconstrained request is reported; this check does not test whether the installed version satisfies them.
 
+ENV013  CA packages below eMudhra remediation minimum
+  Why: Applications using an environment's CA packages need the distribution's recommended updates following the October 2026 eMudhra intermediate-certificate compromise.
+  Fix: Update certifi to >=2026.10.19 and ca-certificates to >=2026.10.19 on conda-forge or >=2026.10.20 on Anaconda main, in each affected prefix; update image builds and project locks as appropriate. Keep certificate verification enabled.
+  Enabled profiles: container (warning), container-development (warning), container-distroless (warning), container-runtime (warning), local (warning)
+  Docs:
+    https://conda.org/blog/2026-10-21-emudhra-security-updates/
+    https://github.com/conda-forge/conda-forge.github.io/issues/2967
+    https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2
+  Exceptions:
+    Minimums were verified on 2026-10-26 for the official conda-forge and Anaconda main channels; custom or missing channel identities are unknown.
+    certifi 2026.10.18 already fixes the incident but falls below the distributions' recommended minimum; older metadata is not proof that an affected certificate remains or is trusted.
+    Only conda package metadata is checked, not pip distributions, vendored copies, PEM contents, custom CA files or the operating system trust store.
+    Python/package pins or retired platforms may prevent updates; use a supported environment or distribution rather than disabling TLS verification.
+
 IMG001  Package archives shipped in image
   Why: Cached downloads add content to the image after installation has finished.
   Fix: Add `conda clean --tarballs -y` to the same `RUN` step that installs packages, or keep downloads in a BuildKit cache mount.
