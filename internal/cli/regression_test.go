@@ -156,8 +156,8 @@ func TestScanJSONLocalWritesSingleObjectAndKeepsExistingSBOMs(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = runCLI(t, context.Background(), "scan", "--format", "json", "--output-dir", outDir, root)
-	if ExitCode(err) != 1 {
-		t.Fatalf("repeated scan should be incomplete, got %v", err)
+	if ExitCode(err) != 0 {
+		t.Fatalf("repeated scan should skip pre-existing output successfully, got %v", err)
 	}
 	after, err := os.ReadFile(filepath.Join(outDir, entries[0].Name()))
 	if err != nil || !bytes.Equal(before, after) {

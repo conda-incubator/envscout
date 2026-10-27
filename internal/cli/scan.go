@@ -33,7 +33,7 @@ func scanCommand(opts *commandOptions) *cobra.Command {
 				}
 				return errors.Join(renderImage(cmd, opts, report, true), err)
 			}
-			ctx, stopProgress := startDiscoveryProgress(cmd.Context(), cmd.ErrOrStderr(), opts.format == "text")
+			ctx, stopProgress := startScanProgress(cmd.Context(), cmd.ErrOrStderr(), opts.format == "text")
 			report, err := inventory.Scan(ctx, inputs, opts.outputDir)
 			err = errors.Join(err, stopProgress())
 			// A text report with nothing recorded would be misleading; the error alone is the answer.
@@ -63,7 +63,7 @@ func renderScan(cmd *cobra.Command, opts *commandOptions, report inventory.ScanR
 func renderScanText(cmd *cobra.Command, report inventory.ScanReport) error {
 	out := newPrinter(cmd.OutOrStdout())
 	out.Printf("Scan evidence | %s\n\n", report.Started.Format(time.RFC3339))
-	failures := 0
+	failures, written, preExisting := 0, 0, 0
 	for _, observation := range report.Observations {
 		env := observation.Environment
 		if env.Kind == discovery.KindVenv {
@@ -72,11 +72,17 @@ func renderScanText(cmd *cobra.Command, report inventory.ScanReport) error {
 			out.Printf("%s  (revision %s)\n", lintText(env.Name), formatRevision(env.Revision))
 		}
 		out.Printf("  Prefix: %s\n  Duration: %s\n", lintText(env.Path), observation.Duration.Round(time.Millisecond))
+		if observation.Result.PreExisting {
+			preExisting++
+			out.Printf("  SBOM: pre-existing (not rescanned): %s\n\n", lintText(observation.Result.Path))
+			continue
+		}
 		if observation.Error != "" {
 			failures++
 			out.Printf("  SBOM: not written (%s)\n\n", lintText(observation.Error))
 			continue
 		}
+		written++
 		result := observation.Result
 		out.Printf("  Syft: %s; directory source; %d conda, %d installed Python metadata, %d other packages observed\n  SBOM: %s\n", syftVersion(result.SyftVersion), result.Conda, result.PythonInstalled, result.Other, lintText(result.Path))
 		if observation.Pixi != "" {
@@ -89,7 +95,7 @@ func renderScanText(cmd *cobra.Command, report inventory.ScanReport) error {
 		out.Printf("  %s\n", lintText(root))
 	}
 	environments := len(report.Discovery.Environments)
-	out.Printf("Summary: %s; %d environments found, %d SBOMs written, %d failed scans, %d discovery issues\n", report.Status, environments, len(report.Observations)-failures, failures, len(report.Discovery.Issues))
+	out.Printf("Summary: %s; %d environments found, %d SBOMs written, %d pre-existing SBOMs, %d failed scans, %d discovery issues\n", report.Status, environments, written, preExisting, failures, len(report.Discovery.Issues))
 	out.Printf("Timing: discovery %s; total %s\n", report.DiscoveryDuration.Round(time.Millisecond), report.TotalDuration.Round(time.Millisecond))
 	out.Println("Coverage: environment prefixes within requested roots only; package counts are Syft observations, not verified totals.")
 	return out.Err()

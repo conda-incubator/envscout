@@ -89,11 +89,11 @@ func TestScanRefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	second, err := Scan(context.Background(), []string{root}, outputDir)
-	if err == nil || !strings.Contains(err.Error(), "scan incomplete: 1 failed target(s), 0 discovery issue(s)") {
-		t.Fatalf("repeat scan must return incomplete error: %v", err)
+	if err != nil {
+		t.Fatalf("repeat scan must skip its pre-existing output successfully: %v", err)
 	}
-	if second.Status != StatusIncomplete || len(second.Observations) != 1 || !strings.Contains(second.Observations[0].Error, "already exists") {
-		t.Fatalf("repeat scan must record refused overwrite: %+v", second)
+	if second.Status != StatusComplete || len(second.Observations) != 1 || second.Observations[0].Error != "" || !second.Observations[0].Result.PreExisting {
+		t.Fatalf("repeat scan must record pre-existing output, not a failure: %+v", second)
 	}
 	after, err := os.ReadFile(first.Observations[0].Result.Path)
 	if err != nil || string(after) != string(before) {
@@ -214,10 +214,10 @@ func TestInspectImageScanWritesOneSBOM(t *testing.T) {
 	if err != nil || !json.Valid(data) {
 		t.Fatalf("invalid SBOM: %v", err)
 	}
-	// A second scan must refuse to overwrite and surface the error.
+	// A second scan preserves the file and reports a pre-existing artifact.
 	again, err := InspectImage(context.Background(), archive, "linux/amd64", outputDir)
-	if err == nil || !strings.Contains(err.Error(), "create SBOM") || again.ScanError == "" {
-		t.Fatalf("repeat image scan should refuse overwrite: %v / %+v", err, again)
+	if err != nil || again.Result == nil || !again.Result.PreExisting || again.Result.Path != report.Result.Path || again.ScanError != "" || again.Status != StatusCompleted {
+		t.Fatalf("repeat image scan should skip successfully: %v / %+v", err, again)
 	}
 	if again.Image.ManifestDigest == "" {
 		t.Fatal("image identity must be returned even on scan failure")

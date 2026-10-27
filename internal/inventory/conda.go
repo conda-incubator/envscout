@@ -24,6 +24,7 @@ import (
 // PythonInstalled counts Python installation metadata, not necessarily pip installs.
 type Result struct {
 	Path            string `json:"path"`
+	PreExisting     bool   `json:"pre_existing,omitempty"` // Skipped output; counts and freshness were not inspected.
 	SyftVersion     string `json:"syft_version"`
 	Conda           int    `json:"conda"`
 	PythonInstalled int    `json:"python_installed"`
@@ -54,7 +55,8 @@ func Filename(env discovery.Environment) string {
 // errUnknownKind reports an environment whose Kind is neither KindConda nor KindVenv.
 var errUnknownKind = errors.New("unknown environment kind")
 
-// WriteEnvironment scans only env.Path and saves a CycloneDX JSON document without replacing any prior output.
+// WriteEnvironment scans only env.Path and saves CycloneDX JSON, or reports a
+// pre-existing regular output without reading, replacing or validating it.
 // KindConda uses the default directory source. KindVenv confines the source to env.Path so that
 // relative interpreter or library links cannot pull packages from outside the prefix.
 // Any other Kind, including the empty string, is rejected before the source opens.
@@ -106,6 +108,9 @@ func write(ctx context.Context, src source.Source, destination string, withConda
 	// O_EXCL refuses to follow an existing symlink, including a dangling one.
 	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
+		if info, statErr := os.Lstat(destination); statErr == nil && info.Mode().IsRegular() {
+			return Result{Path: destination, PreExisting: true}, nil
+		}
 		return Result{}, fmt.Errorf("create SBOM %s: SBOM already exists: %w", destination, err)
 	} else if err != nil {
 		return Result{}, fmt.Errorf("create SBOM %s: %w", destination, err)

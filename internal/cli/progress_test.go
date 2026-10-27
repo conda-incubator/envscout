@@ -5,8 +5,12 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/conda-incubator/envscout/internal/inventory"
 )
 
 // failWriter rejects every write after the first n bytes.
@@ -126,5 +130,286 @@ func TestProgressReturnsFirstWriteError(t *testing.T) {
 	tick <- time.Time{}
 	if err := closeFn(); !errors.Is(err, writeErr) {
 		t.Fatalf("close error = %v, want %v", err, writeErr)
+	}
+}
+
+// fakeClock is read by the renderer goroutine and written by the test, so it is atomic.
+type fakeClock struct{ nanos atomic.Int64 }
+
+func newFakeClock() *fakeClock {
+	c := &fakeClock{}
+	c.nanos.Store(time.Unix(1000, 0).UnixNano())
+	return c
+}
+
+func (c *fakeClock) Now() time.Time          { return time.Unix(0, c.nanos.Load()) }
+func (c *fakeClock) Advance(d time.Duration) { c.nanos.Add(int64(d)) }
+
+// ackWriter signals on acks after each write, so a test knows a frame was drawn.
+type ackWriter struct {
+	mu   sync.Mutex
+	buf  bytes.Buffer
+	acks chan struct{}
+}
+
+func newAckWriter() *ackWriter { return &ackWriter{acks: make(chan struct{}, 64)} }
+
+func (w *ackWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	n, err := w.buf.Write(p)
+	w.mu.Unlock()
+	w.acks <- struct{}{}
+	return n, err
+}
+
+func (w *ackWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// awaitFrame blocks until the writer has received one more write.
+func (w *ackWriter) awaitFrame(t *testing.T) {
+	t.Helper()
+	select {
+	case <-w.acks:
+	case <-time.After(5 * time.Second):
+		t.Fatal("renderer did not draw a frame")
+	}
+}
+
+// tickAndAwait sends one tick and waits until the resulting frame is drawn.
+func tickAndAwait(t *testing.T, tick chan time.Time, w *ackWriter) {
+	t.Helper()
+	tick <- time.Time{}
+	w.awaitFrame(t)
+}
+
+func scanCfg(tick chan time.Time, clock *fakeClock) scanCoreConfig {
+	return scanCoreConfig{width: 0, enabled: true, tick: tick, stopTicker: noopTicker, now: clock.Now}
+}
+
+func TestStartScanProgressDisabledIsNoop(t *testing.T) {
+	ctx := context.Background()
+	gotCtx, closeFn := startScanProgress(ctx, &bytes.Buffer{}, true)
+	if gotCtx != ctx {
+		t.Fatal("non-terminal writer must return the original context")
+	}
+	if err := closeFn(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if _, closeFn := startScanProgress(ctx, &bytes.Buffer{}, false); closeFn() != nil {
+		t.Fatal("disabled scan progress must close without error")
+	}
+}
+
+func TestScanProgressDisabledAttachesNothing(t *testing.T) {
+	ctx := context.Background()
+	gotCtx, d, s, closeFn := startScanProgressCore(ctx, &bytes.Buffer{}, scanCoreConfig{stopTicker: noopTicker})
+	if gotCtx != ctx || d != nil || s != nil {
+		t.Fatal("disabled core must return ctx unchanged with no counters")
+	}
+	if err := closeFn(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+func TestScanProgressDiscoveryLineUnchangedBeforeSBOMPhase(t *testing.T) {
+	w := newAckWriter()
+	tick := make(chan time.Time)
+	_, discoveryP, _, closeFn := startScanProgressCore(context.Background(), w, scanCfg(tick, newFakeClock()))
+	discoveryP.Folders.Add(3)
+	discoveryP.Environments.Add(1)
+	tickAndAwait(t, tick, w)
+	if err := closeFn(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	want := progressClear + "Folders scanned: 3 | Environments found: 1" + progressClear
+	if got := w.String(); got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestScanProgressSwitchesToSBOMPhaseAndEstimatesRemaining(t *testing.T) {
+	w := newAckWriter()
+	tick := make(chan time.Time)
+	clock := newFakeClock()
+	_, _, sbom, closeFn := startScanProgressCore(context.Background(), w, scanCfg(tick, clock))
+	sbom.Started.Store(true)
+	sbom.Total.Store(4)
+	sbom.Finished.Store(3)
+	sbom.Active.Store(1)
+	sbom.PreExisting.Store(1)
+	sbom.Failed.Store(1)
+	sbom.Cataloged.Store(1)
+	sbom.CatalogDuration.Store(int64(90 * time.Second))
+	sbom.ActiveStarted.Store(clock.Now().UnixNano())
+
+	tickAndAwait(t, tick, w)
+	clock.Advance(65 * time.Second)
+	tickAndAwait(t, tick, w) // Subtract time spent on the active scan from the estimate.
+	if err := closeFn(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	got := w.String()
+	for _, want := range []string{
+		"| Creating SBOMs: 3/4 finished | remaining ~01:30 | 1 pre-existing | 1 failed | 1 active",
+		"/ Creating SBOMs: 3/4 finished | remaining ~00:25 | 1 pre-existing | 1 failed | 1 active",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "%") || strings.Contains(got, "elapsed") {
+		t.Fatalf("SBOM phase must show approximate remaining time instead of elapsed: %q", got)
+	}
+}
+
+func TestScanProgressSpinnerRotatesEveryTickWithoutCountChange(t *testing.T) {
+	w := newAckWriter()
+	tick := make(chan time.Time)
+	_, _, sbom, closeFn := startScanProgressCore(context.Background(), w, scanCfg(tick, newFakeClock()))
+	sbom.Started.Store(true)
+	sbom.Total.Store(2)
+	for range 4 {
+		tickAndAwait(t, tick, w)
+	}
+	if err := closeFn(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	for _, frame := range spinnerFrames {
+		if !strings.Contains(w.String(), frame+" Creating SBOMs") {
+			t.Fatalf("spinner frame %q missing from %q", frame, w.String())
+		}
+	}
+}
+
+func TestScanProgressRemainingBeyondOneHour(t *testing.T) {
+	w := newAckWriter()
+	tick := make(chan time.Time)
+	clock := newFakeClock()
+	_, _, sbom, closeFn := startScanProgressCore(context.Background(), w, scanCfg(tick, clock))
+	sbom.Started.Store(true)
+	sbom.Total.Store(2)
+	sbom.Finished.Store(1)
+	sbom.Cataloged.Store(1)
+	sbom.CatalogDuration.Store(int64(3725 * time.Second))
+	tickAndAwait(t, tick, w)
+	if err := closeFn(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if !strings.Contains(w.String(), "remaining ~62:05") {
+		t.Fatalf("remaining time must count minutes past one hour: %q", w.String())
+	}
+}
+
+func TestSBOMRemainingWithoutSamplesAndOverrun(t *testing.T) {
+	counts := &inventory.Progress{}
+	counts.Total.Store(5)
+	counts.Finished.Store(4)
+	counts.PreExisting.Store(4)
+	if line := sbomLine(counts, time.Unix(1000, 0), "|"); !strings.Contains(line, "remaining estimating") {
+		t.Fatalf("pre-existing skips cannot supply a cataloging rate: %s", line)
+	}
+	counts.Cataloged.Store(1)
+	counts.CatalogDuration.Store(int64(time.Second))
+	counts.Active.Store(1)
+	counts.ActiveStarted.Store(time.Unix(998, 0).UnixNano())
+	if line := sbomLine(counts, time.Unix(1000, 0), "|"); !strings.Contains(line, "remaining estimating") {
+		t.Fatalf("an active scan exceeding its estimate must not claim zero remaining: %s", line)
+	}
+	counts.Finished.Store(5)
+	if line := sbomLine(counts, time.Unix(1000, 0), "|"); !strings.Contains(line, "remaining 00:00") {
+		t.Fatalf("finished scans should report zero remaining: %s", line)
+	}
+}
+
+func TestScanRemainingVisibleOnStandardTerminal(t *testing.T) {
+	w := newAckWriter()
+	tick := make(chan time.Time)
+	cfg := scanCfg(tick, newFakeClock())
+	cfg.width = 80
+	_, _, counts, closeFn := startScanProgressCore(context.Background(), w, cfg)
+	counts.Started.Store(true)
+	counts.Total.Store(100)
+	counts.Finished.Store(99)
+	counts.PreExisting.Store(98)
+	counts.Cataloged.Store(1)
+	counts.CatalogDuration.Store(int64(12 * time.Second))
+	tickAndAwait(t, tick, w)
+	if err := closeFn(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(w.String(), "remaining ~00:12") {
+		t.Fatalf("remaining time must not be truncated behind secondary counters: %q", w.String())
+	}
+}
+
+func TestScanProgressCloseIsIdempotentAndClears(t *testing.T) {
+	w := newAckWriter()
+	_, _, sbom, closeFn := startScanProgressCore(context.Background(), w, scanCfg(make(chan time.Time), newFakeClock()))
+	sbom.Started.Store(true)
+	if err := closeFn(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	before := w.String()
+	if err := closeFn(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+	if w.String() != before {
+		t.Fatal("second close must not write again")
+	}
+	if !strings.HasSuffix(w.String(), progressClear) {
+		t.Fatalf("close must end by clearing the line: %q", w.String())
+	}
+}
+
+func TestScanProgressCancelStopsRenderer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	_, _, _, closeFn := startScanProgressCore(ctx, newAckWriter(), scanCfg(make(chan time.Time), newFakeClock()))
+	cancel()
+	if err := closeFn(); err != nil {
+		t.Fatalf("close after cancel: %v", err)
+	}
+}
+
+func TestScanProgressReturnsWriteError(t *testing.T) {
+	writeErr := errors.New("tty gone")
+	w := &failWriter{allowed: 0, err: writeErr}
+	tick := make(chan time.Time)
+	_, discoveryP, _, closeFn := startScanProgressCore(context.Background(), w, scanCfg(tick, newFakeClock()))
+	discoveryP.Folders.Add(1)
+	tick <- time.Time{}
+	if err := closeFn(); !errors.Is(err, writeErr) {
+		t.Fatalf("close error = %v, want %v", err, writeErr)
+	}
+}
+
+func TestScanProgressNarrowTerminalStaysOnOneLine(t *testing.T) {
+	w := newAckWriter()
+	tick := make(chan time.Time)
+	cfg := scanCfg(tick, newFakeClock())
+	cfg.width = 12
+	_, _, sbom, closeFn := startScanProgressCore(context.Background(), w, cfg)
+	sbom.Started.Store(true)
+	sbom.Total.Store(9)
+	tickAndAwait(t, tick, w)
+	if err := closeFn(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if strings.ContainsAny(w.String(), "\n\r\x1b") && strings.Count(w.String(), "\r") != 2 {
+		t.Fatalf("narrow line must not wrap or add control text: %q", w.String())
+	}
+}
+
+func TestStartScanProgressTermDumbDisablesRendering(t *testing.T) {
+	t.Setenv("TERM", "dumb")
+	ctx := context.Background()
+	gotCtx, closeFn := startScanProgress(ctx, &bytes.Buffer{}, true)
+	if gotCtx != ctx {
+		t.Fatal("TERM=dumb must return the original context")
+	}
+	if err := closeFn(); err != nil {
+		t.Fatalf("close: %v", err)
 	}
 }

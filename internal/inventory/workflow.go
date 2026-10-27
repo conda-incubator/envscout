@@ -78,17 +78,26 @@ func Scan(ctx context.Context, roots []string, outputDir string) (report ScanRep
 		report.TotalDuration = time.Since(started)
 		return report, err
 	}
+	progress := progressFrom(ctx)
+	if progress != nil {
+		progress.Total.Store(uint64(len(discovered.Environments)))
+		progress.Started.Store(true)
+	}
 	for _, env := range discovered.Environments {
 		if err := ctx.Err(); err != nil {
 			return finishScan(ctx, report, started, err)
 		}
 		start := time.Now()
+		if progress != nil {
+			progress.ActiveStarted.Store(start.UnixNano())
+			progress.Active.Store(1)
+		}
 		result, err := WriteEnvironment(ctx, env, absOutput)
 		observation := ScanObservation{Environment: env, Result: result, Duration: time.Since(start)}
 		if err != nil {
 			observation.Error = err.Error()
 			observation.Result = Result{}
-		} else {
+		} else if !result.PreExisting {
 			if env.Kind == discovery.KindConda {
 				observation.Pixi = PixiLockSummary(env.Path)
 			}
@@ -102,6 +111,19 @@ func Scan(ctx context.Context, roots []string, outputDir string) (report ScanRep
 			}
 		}
 		report.Observations = append(report.Observations, observation)
+		if progress != nil {
+			if observation.Result.PreExisting {
+				progress.PreExisting.Add(1)
+			} else if observation.Error != "" {
+				progress.Failed.Add(1)
+			} else {
+				progress.CatalogDuration.Add(int64(observation.Duration))
+				progress.Cataloged.Add(1)
+			}
+			progress.Finished.Add(1)
+			progress.Active.Store(0)
+			progress.ActiveStarted.Store(0)
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return finishScan(ctx, report, started, ctxErr)
 		}
@@ -209,7 +231,7 @@ func InspectImage(ctx context.Context, input, platform, outputDir string) (repor
 			report.ScanError = writeErr.Error()
 		} else {
 			report.Result = &result
-			if len(found.Environments) > 0 && result.Conda == 0 {
+			if !result.PreExisting && len(found.Environments) > 0 && result.Conda == 0 {
 				scanErr = fmt.Errorf("no valid conda package metadata in discovered image prefixes")
 				report.ScanError = scanErr.Error()
 			}
