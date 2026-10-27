@@ -5,10 +5,18 @@ import (
 	"sync"
 )
 
-// Environment is an installed conda prefix; Name is its directory name, not a registry alias.
+// Environment kinds. Kind is set on every discovered environment.
+const (
+	KindConda = "conda"
+	KindVenv  = "venv"
+)
+
+// Environment is an installed prefix; Name is its directory name, not a registry alias.
+// Kind is KindConda or KindVenv. Revision is conda history only and is always nil for venvs.
 type Environment struct {
 	Name     string `json:"name"`
 	Path     string `json:"path"`
+	Kind     string `json:"kind"`
 	Revision *int   `json:"revision"`
 }
 

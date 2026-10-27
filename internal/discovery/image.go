@@ -83,7 +83,7 @@ func FindImage(ctx context.Context, img *image.Image, readHistory bool) (report 
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
-		env := Environment{Name: path.Base(prefixPath), Path: prefixPath}
+		env := Environment{Name: path.Base(prefixPath), Path: prefixPath, Kind: KindConda}
 		if readHistory {
 			histPath := path.Join(prefixPath, "conda-meta", "history")
 			rev, herr := imageRevision(ctx, img, searcher, histPath)

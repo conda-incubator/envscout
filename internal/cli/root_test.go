@@ -264,9 +264,9 @@ func TestScanWritesOneSBOMPerPrefix(t *testing.T) {
 		"; directory source; 1 conda, 0 installed Python metadata, 0 other packages observed",
 		"SBOM: " + filepath.Join(workdir, "sboms"),
 		"Searched roots:\n  " + root,
-		"Summary: complete; 2 conda environments found, 2 SBOMs written, 0 failed scans, 0 discovery issues",
+		"Summary: complete; 2 environments found, 2 SBOMs written, 0 failed scans, 0 discovery issues",
 		"Timing: discovery ",
-		"Coverage: conda prefixes within requested roots only",
+		"Coverage: environment prefixes within requested roots only",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("scan report missing %q: %s", want, output.String())
@@ -285,7 +285,7 @@ func TestScanWritesOneSBOMPerPrefix(t *testing.T) {
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "2 failed target(s)") {
 		t.Fatalf("repeated scan should not replace SBOMs: %v", err)
 	}
-	if !strings.Contains(output.String(), "Summary: incomplete; 2 conda environments found, 0 SBOMs written, 2 failed scans, 0 discovery issues") || !strings.Contains(output.String(), "SBOM already exists") {
+	if !strings.Contains(output.String(), "Summary: incomplete; 2 environments found, 0 SBOMs written, 2 failed scans, 0 discovery issues") || !strings.Contains(output.String(), "SBOM already exists") {
 		t.Fatalf("repeated scan must report failures and retain previous SBOMs: %s", output.String())
 	}
 }
@@ -301,7 +301,7 @@ func TestScanWithoutEnvironments(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "Summary: complete; 0 conda environments found, 0 SBOMs written, 0 failed scans, 0 discovery issues") || !strings.Contains(output.String(), "Searched roots:\n  "+root) {
+	if !strings.Contains(output.String(), "Summary: complete; 0 environments found, 0 SBOMs written, 0 failed scans, 0 discovery issues") || !strings.Contains(output.String(), "Searched roots:\n  "+root) {
 		t.Fatalf("empty scan must show scope and counts: %s", output.String())
 	}
 }
@@ -331,7 +331,7 @@ func TestScanReportsPartialInventory(t *testing.T) {
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "scan incomplete: 1 failed target(s)") {
 		t.Fatalf("expected incomplete scan error, got %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Summary: incomplete; 2 conda environments found, 1 SBOMs written, 1 failed scans, 0 discovery issues") {
+	if !strings.Contains(stdout.String(), "Summary: incomplete; 2 environments found, 1 SBOMs written, 1 failed scans, 0 discovery issues") {
 		t.Fatalf("summary must count the failed candidate and the kept good prefix: stdout=%s", stdout.String())
 	}
 }

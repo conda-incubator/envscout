@@ -233,10 +233,10 @@ func TestCondaRecordsCanceledReturnsNoRecords(t *testing.T) {
 	}
 }
 
-func TestWriteCondaInvalidRecordIsIncomplete(t *testing.T) {
+func TestWriteEnvironmentInvalidRecordIsIncomplete(t *testing.T) {
 	prefix := condaFixtureDir(t, `{"name":"","version":"1","build":"0"}`)
-	env := discovery.Environment{Name: "sample", Path: prefix}
-	result, err := WriteConda(context.Background(), env, t.TempDir())
+	env := discovery.Environment{Name: "sample", Path: prefix, Kind: discovery.KindConda}
+	result, err := WriteEnvironment(context.Background(), env, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

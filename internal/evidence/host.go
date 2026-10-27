@@ -85,6 +85,12 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			cancelErr = err
 			break
 		}
+		// Venvs are not conda prefixes. Skip them before any conda metadata, Python,
+		// cache, or lock read so their presence is an explicit unsupported issue.
+		if env.Kind == discovery.KindVenv {
+			snapshot.Issues = append(snapshot.Issues, Issue{Capability: "evaluation", Path: env.Path, Message: "virtualenv lint is not supported; use find or scan"})
+			continue
+		}
 		records, err := condaRecordsForPrefix(ctx, env.Path)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			cancelErr = ctxErr

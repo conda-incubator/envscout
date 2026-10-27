@@ -56,7 +56,12 @@ func knownCandidates(inputs knownInputs, col *collector) []candidate {
 	out := appendFixed(nil, inputs)
 	if inputs.cwd != "" {
 		out = append(out, newCandidate("cwd/.pixi/envs", filepath.Join(inputs.cwd, ".pixi", "envs"), kindContainer, false))
+		out = append(out, newCandidate("cwd/prefix", inputs.cwd, kindPrefix, false))
+		for _, name := range []string{".venv", "venv", ".env", ".virtualenv"} {
+			out = append(out, newCandidate("cwd/"+name, filepath.Join(inputs.cwd, name), kindPrefix, false))
+		}
 	}
+	out = append(out, venvCandidates(inputs, col)...)
 	if inputs.goos == "darwin" {
 		for _, product := range []string{"/opt/homebrew/Caskroom", "/usr/local/Caskroom"} {
 			for _, name := range []string{"miniconda", "anaconda"} {
@@ -81,6 +86,68 @@ func knownCandidates(inputs knownInputs, col *collector) []candidate {
 		out = out[:maxHintCandidates]
 	}
 	return out
+}
+
+// venvCandidates resolves virtualenv locations. Active and project hints must be absolute
+// and are probed directly; container hints contribute their immediate children. Nothing is
+// walked recursively, and no uv download or managed-Python directory is included.
+func venvCandidates(inputs knownInputs, col *collector) []candidate {
+	var out []candidate
+	absolute := func(source, value string) bool {
+		switch {
+		case len(value) > maxHintPathBytes:
+			col.addIssue(source, fmt.Errorf("hint path exceeds known-location limit"))
+		case !filepath.IsAbs(value):
+			col.addIssue(source, fmt.Errorf("hint must be an absolute path"))
+		default:
+			return true
+		}
+		return false
+	}
+	for _, name := range []string{"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"} {
+		if value := inputs.env[name]; value != "" && absolute(name, value) {
+			out = append(out, newCandidate(name, value, kindPrefix, true))
+		}
+	}
+	for _, name := range []string{"WORKON_HOME", "POETRY_VIRTUALENVS_PATH"} {
+		if value := inputs.env[name]; value != "" && absolute(name, value) {
+			out = append(out, newCandidate(name, value, kindContainer, true))
+		}
+	}
+	if cache := inputs.env["POETRY_CACHE_DIR"]; cache != "" && absolute("POETRY_CACHE_DIR", cache) {
+		out = append(out, newCandidate("POETRY_CACHE_DIR", filepath.Join(cache, "virtualenvs"), kindContainer, true))
+	} else if cache := defaultPoetryCache(inputs); cache != "" {
+		out = append(out, newCandidate("poetry/cache", cache, kindContainer, false))
+	}
+	if inputs.home != "" {
+		for _, name := range []string{".virtualenvs", ".venvs"} {
+			out = append(out, newCandidate("home/"+name, filepath.Join(inputs.home, name), kindContainer, false))
+		}
+	}
+	return out
+}
+
+// defaultPoetryCache returns Poetry's default virtualenvs directory for the injected platform,
+// or "" when the platform base directory is unknown.
+func defaultPoetryCache(inputs knownInputs) string {
+	switch inputs.goos {
+	case "windows":
+		if base := inputs.env["LOCALAPPDATA"]; base != "" {
+			return filepath.Join(base, "pypoetry", "Cache", "virtualenvs")
+		}
+	case "darwin":
+		if inputs.home != "" {
+			return filepath.Join(inputs.home, "Library", "Caches", "pypoetry", "virtualenvs")
+		}
+	default:
+		if base := inputs.env["XDG_CACHE_HOME"]; base != "" {
+			return filepath.Join(base, "pypoetry", "virtualenvs")
+		}
+		if inputs.home != "" {
+			return filepath.Join(inputs.home, ".cache", "pypoetry", "virtualenvs")
+		}
+	}
+	return ""
 }
 
 func newCandidate(source, p string, k kind, configured bool) candidate {
@@ -435,7 +502,9 @@ func (p *prober) isRealDir(path string, configured bool, typeError string) bool 
 		p.col.addIssue(path, fmt.Errorf("symlink in hint path"))
 		return false
 	case !info.IsDir():
-		p.col.addIssue(path, errors.New(typeError))
+		if configured {
+			p.col.addIssue(path, errors.New(typeError))
+		}
 		return false
 	}
 	return true

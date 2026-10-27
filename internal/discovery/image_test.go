@@ -42,9 +42,9 @@ func TestFindImageFinalSquash(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Environment{
-		{Name: "broken", Path: "/broken"},
-		{Name: "base", Path: "/opt/base", Revision: intPtr(0)},
-		{Name: "nested", Path: "/opt/base/envs/nested", Revision: nil},
+		{Name: "broken", Path: "/broken", Kind: KindConda},
+		{Name: "base", Path: "/opt/base", Kind: KindConda, Revision: intPtr(0)},
+		{Name: "nested", Path: "/opt/base/envs/nested", Kind: KindConda, Revision: nil},
 	}
 	if !reflect.DeepEqual(report.Environments, want) {
 		t.Fatalf("environments = %+v, want %+v", report.Environments, want)
@@ -103,7 +103,7 @@ func TestFindImageLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Environment{{Name: "real", Path: "/real"}}
+	want := []Environment{{Name: "real", Path: "/real", Kind: KindConda}}
 	if !reflect.DeepEqual(report.Environments, want) {
 		t.Fatalf("environments = %+v, want %+v", report.Environments, want)
 	}
@@ -162,7 +162,7 @@ func TestFindImagePOSIXPaths(t *testing.T) {
 	})
 	img := &image.Image{Layers: []*image.Layer{{SquashedTree: tree}}, FileCatalog: catalog}
 	report, err := FindImage(context.Background(), img, false)
-	want := []Environment{{Name: `odd\name`, Path: `/odd\name`}}
+	want := []Environment{{Name: `odd\name`, Path: `/odd\name`, Kind: KindConda}}
 	if err != nil || !reflect.DeepEqual(report.Environments, want) || len(report.Issues) != 0 {
 		t.Fatalf("report = %+v, error = %v, want %+v", report, err, want)
 	}

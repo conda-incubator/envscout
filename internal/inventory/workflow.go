@@ -18,7 +18,7 @@ const (
 	StatusIncomplete = "incomplete"
 )
 
-// ScanObservation records one discovered conda prefix and its SBOM outcome.
+// ScanObservation records one discovered environment and its SBOM outcome.
 // Result is zero when Error is set. Pixi is empty unless the prefix carries a
 // Pixi marker that can be read.
 type ScanObservation struct {
@@ -29,7 +29,7 @@ type ScanObservation struct {
 	Error       string                `json:"error,omitempty"`
 }
 
-// ScanReport is the business outcome of ScanConda, independent of any output format.
+// ScanReport is the business outcome of Scan, independent of any output format.
 type ScanReport struct {
 	Source            string            `json:"source"`
 	Started           time.Time         `json:"started_at"`
@@ -41,14 +41,14 @@ type ScanReport struct {
 	Error             string            `json:"error,omitempty"`
 }
 
-// ScanConda discovers conda prefixes under roots and writes one CycloneDX SBOM per
-// prefix into outputDir. A relative outputDir is resolved to an absolute path.
+// Scan discovers environments under roots and writes one CycloneDX SBOM per
+// environment into outputDir. A relative outputDir is resolved to an absolute path.
 // Existing SBOMs are never overwritten. Per-target failures and discovery issues are
 // recorded in the report and returned as an ordinary "scan incomplete" error while
 // successful observations and files are preserved. Context cancellation stops further
 // launches and returns the cancellation cause wrapped, so errors.Is holds for both
 // context.Canceled and custom causes. Bad roots return a discovery error.
-func ScanConda(ctx context.Context, roots []string, outputDir string) (report ScanReport, err error) {
+func Scan(ctx context.Context, roots []string, outputDir string) (report ScanReport, err error) {
 	started := time.Now()
 	report = ScanReport{
 		Source:       "dir",
@@ -83,17 +83,19 @@ func ScanConda(ctx context.Context, roots []string, outputDir string) (report Sc
 			return finishScan(ctx, report, started, err)
 		}
 		start := time.Now()
-		result, err := WriteConda(ctx, env, absOutput)
+		result, err := WriteEnvironment(ctx, env, absOutput)
 		observation := ScanObservation{Environment: env, Result: result, Duration: time.Since(start)}
 		if err != nil {
 			observation.Error = err.Error()
 			observation.Result = Result{}
 		} else {
-			observation.Pixi = PixiLockSummary(env.Path)
+			if env.Kind == discovery.KindConda {
+				observation.Pixi = PixiLockSummary(env.Path)
+			}
 			// The SBOM is kept either way, but unknown coordinates or a prefix with no
 			// valid conda record make the observation incomplete, so the scan exits non-zero.
 			switch {
-			case result.Conda == 0:
+			case env.Kind == discovery.KindConda && result.Conda == 0:
 				observation.Error = "no valid conda package metadata in prefix"
 			case result.Unknowns > 0:
 				observation.Error = fmt.Sprintf("%d unknown file coordinate(s) in SBOM", result.Unknowns)

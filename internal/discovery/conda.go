@@ -98,6 +98,10 @@ func walkRoot(ctx context.Context, root string, col *collector, readHistory bool
 			return nil
 		}
 		if !entry.IsDir() {
+			if entry.Name() == pyvenvMarker {
+				// A marker is evidence for its parent prefix; the parent decides the kind.
+				return inspectMarkerPrefix(ctx, rootDir, root, filepath.Dir(path), readHistory, col)
+			}
 			return nil
 		}
 		if col.progress != nil {
@@ -163,6 +167,20 @@ func isPackageCache(parent, pkgs string) bool {
 	}
 	info, err := os.Lstat(filepath.Join(pkgs, "urls.txt"))
 	return err == nil && info.Mode().IsRegular()
+}
+
+// inspectMarkerPrefix inspects the prefix that owns a pyvenv.cfg marker found by the walk
+// and records its result. The prefix is always decided by inspectScopedPrefix, so a
+// conda-meta and a pyvenv.cfg in one directory resolve identically from either callback.
+func inspectMarkerPrefix(ctx context.Context, rootDir *os.Root, root, prefix string, readHistory bool, col *collector) error {
+	env, valid, issues := inspectPrefix(ctx, rootDir, root, prefix, readHistory)
+	for _, issue := range issues {
+		col.addIssue(issue.Path, errors.New(issue.Error))
+	}
+	if valid {
+		col.addEnvironment(env)
+	}
+	return nil
 }
 
 // inspectPrefix validates a candidate prefix through an os.Root scoped to the prefix.

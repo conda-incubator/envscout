@@ -13,14 +13,14 @@ import (
 )
 
 func TestFilename(t *testing.T) {
-	a := discovery.Environment{Name: "same / name", Path: "/tmp/a/same / name"}
-	b := discovery.Environment{Name: a.Name, Path: "/tmp/b/same / name"}
+	a := discovery.Environment{Name: "same / name", Path: "/tmp/a/same / name", Kind: discovery.KindConda}
+	b := discovery.Environment{Name: a.Name, Path: "/tmp/b/same / name", Kind: discovery.KindConda}
 	if Filename(a) == Filename(b) || strings.ContainsAny(Filename(a), "/\\ ") || !strings.HasSuffix(Filename(a), ".cdx.json") {
 		t.Fatalf("unsafe or colliding filenames: %q, %q", Filename(a), Filename(b))
 	}
 }
 
-func TestWriteConda(t *testing.T) {
+func TestWriteEnvironment(t *testing.T) {
 	root := t.TempDir()
 	prefix := filepath.Join(root, "envs", "sample")
 	meta := filepath.Join(prefix, "conda-meta")
@@ -37,9 +37,9 @@ func TestWriteConda(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(installed, "METADATA"), []byte("Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	env := discovery.Environment{Name: "sample", Path: prefix}
+	env := discovery.Environment{Name: "sample", Path: prefix, Kind: discovery.KindConda}
 	output := filepath.Join(root, "reports")
-	result, err := WriteConda(context.Background(), env, output)
+	result, err := WriteEnvironment(context.Background(), env, output)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestWriteConda(t *testing.T) {
 	if !found {
 		t.Fatalf("missing conda package in SBOM: %s", data)
 	}
-	if _, err := WriteConda(context.Background(), env, output); err == nil {
+	if _, err := WriteEnvironment(context.Background(), env, output); err == nil {
 		t.Fatal("existing SBOM should not be overwritten")
 	}
 	again, err := os.ReadFile(result.Path)
@@ -77,19 +77,19 @@ func TestWriteConda(t *testing.T) {
 	}
 }
 
-func TestWriteCondaRefusesExistingSymlink(t *testing.T) {
+func TestWriteEnvironmentRefusesExistingSymlink(t *testing.T) {
 	root := t.TempDir()
 	prefix := filepath.Join(root, "envs", "sample")
 	if err := os.MkdirAll(prefix, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	env := discovery.Environment{Name: "sample", Path: prefix}
+	env := discovery.Environment{Name: "sample", Path: prefix, Kind: discovery.KindConda}
 	output := t.TempDir()
 	destination := filepath.Join(output, Filename(env))
 	if err := os.Symlink(filepath.Join(root, "missing-target"), destination); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := WriteConda(context.Background(), env, output); !errors.Is(err, os.ErrExist) {
+	if _, err := WriteEnvironment(context.Background(), env, output); !errors.Is(err, os.ErrExist) {
 		t.Fatalf("expected dangling symlink refusal, got %v", err)
 	}
 	if target, err := os.Readlink(destination); err != nil || target != filepath.Join(root, "missing-target") {
@@ -100,16 +100,16 @@ func TestWriteCondaRefusesExistingSymlink(t *testing.T) {
 	}
 }
 
-func TestWriteCondaCanceledLeavesNoOutput(t *testing.T) {
+func TestWriteEnvironmentCanceledLeavesNoOutput(t *testing.T) {
 	prefix := filepath.Join(t.TempDir(), "sample")
 	if err := os.MkdirAll(prefix, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	env := discovery.Environment{Name: "sample", Path: prefix}
+	env := discovery.Environment{Name: "sample", Path: prefix, Kind: discovery.KindConda}
 	output := filepath.Join(t.TempDir(), "reports")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := WriteConda(ctx, env, output); !errors.Is(err, context.Canceled) {
+	if _, err := WriteEnvironment(ctx, env, output); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation, got %v", err)
 	}
 	entries, err := os.ReadDir(output)
