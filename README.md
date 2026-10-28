@@ -21,9 +21,15 @@ make build
 
 SBOMs go to `./sboms/` unless `--output-dir` selects another directory; existing files are never overwritten. Pixi environments also show a lock summary when available.
 
+Existing regular SBOM files are counted as pre-existing, left untouched and not rescanned; they do not cause a failure exit. JSON marks them with `pre_existing: true`. Their contents and freshness are not verified. Symlink or directory collisions and genuine scan errors still fail.
+
 All commands support `--format text|json` and `--no-color`. Only `scan` accepts `--output-dir`. Flags may precede or follow the subcommand. Ctrl-C cancels the command.
 
+Interactive text scans show discovery progress followed by completed, pre-existing and failed SBOM counts, a spinner and approximate remaining time. The estimate uses completed new scans, not fast skips, and shows "estimating" until a sample is available. Environment sizes and unfinished skips can change the estimate. JSON and redirected output have no live progress display.
+
 Without roots, `find` checks known installation and configuration locations; it does not search the whole filesystem.
+
+Directory `find` summarizes unreadable paths without failing; use `--verbose` for individual warnings. JSON output always includes the issue details.
 
 Local `find` and `scan` recognize conda prefixes and virtualenvs with a `pyvenv.cfg` marker, including those created by uv, Poetry, virtualenv or `python -m venv`. Scans cover the selected prefix, not inherited system packages or external editable-install sources; empty virtualenvs are valid. Virtualenv linting is not yet supported and reports incomplete inspection (exit 2). OCI environment discovery remains conda-only.
 

@@ -135,8 +135,12 @@ func TestWriteImageRefusesExistingOutput(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := WriteImage(context.Background(), img, "unused", output); !errors.Is(err, os.ErrExist) {
-				t.Fatalf("expected output collision before scan, got %v", err)
+			result, err := WriteImage(context.Background(), img, "unused", output)
+			if symlink && !errors.Is(err, os.ErrExist) {
+				t.Fatalf("expected linked output collision before scan, got %v", err)
+			}
+			if !symlink && (err != nil || !result.PreExisting || result.Path != destination) {
+				t.Fatalf("regular pre-existing output must skip before scanning the invalid image: %+v %v", result, err)
 			}
 			if symlink {
 				target, err := os.Readlink(destination)
@@ -280,8 +284,8 @@ func TestWriteImage(t *testing.T) {
 	if filepath.Base(second.Path) != filepath.Base(result.Path) {
 		t.Fatalf("mutable input affected filename: %q != %q", second.Path, result.Path)
 	}
-	if _, err := WriteImage(context.Background(), loaded.Image, "unused", output); !errors.Is(err, os.ErrExist) {
-		t.Fatalf("expected overwrite refusal, got %v", err)
+	if skipped, err := WriteImage(context.Background(), loaded.Image, "unused", output); err != nil || !skipped.PreExisting || skipped.Path != result.Path {
+		t.Fatalf("expected a pre-existing result without overwriting, got %+v %v", skipped, err)
 	}
 	again, err := os.ReadFile(result.Path)
 	if err != nil || !bytes.Equal(data, again) {

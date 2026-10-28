@@ -19,7 +19,12 @@ func renderImage(cmd *cobra.Command, opts *commandOptions, report inventory.Imag
 		return err
 	}
 	warnings := newPrinter(cmd.ErrOrStderr())
-	renderIssues(warnings, "image path ", report.Issues)
+	if scan || opts.verbose {
+		renderIssues(warnings, "image path ", report.Issues)
+	}
+	if !scan && len(report.Issues) > 0 && !opts.verbose {
+		warnings.Printf("discovery incomplete: %d path(s) could not be inspected; use --verbose to see details\n", len(report.Issues))
+	}
 	return warnings.Err()
 }
 
@@ -45,8 +50,22 @@ func renderImageText(cmd *cobra.Command, opts *commandOptions, report inventory.
 	}
 	if scan {
 		renderImageSBOM(out, report)
+		written, preExisting, failed := 0, 0, 0
+		if report.Result != nil {
+			if report.Result.PreExisting {
+				preExisting = 1
+			} else {
+				written = 1
+			}
+		}
+		if report.ScanError != "" {
+			failed = 1
+		}
+		out.Printf("Summary: %s; %d conda prefixes, %d SBOMs written, %d pre-existing SBOMs, %d failed scans, %d discovery issues\n", report.Status, len(report.Environments), written, preExisting, failed, len(report.Issues))
+	} else {
+		out.Printf("Summary: %s; %s; %d discovery issues\n", report.Status, environmentSummary(report.Environments), len(report.Issues))
 	}
-	out.Printf("Summary: %s; %d conda prefixes, %d discovery issues\nTiming: load/preflight %s; total %s\nCoverage: final image only; package counts are observations, not verified totals.\n", report.Status, len(report.Environments), len(report.Issues), report.LoadDuration.Round(time.Millisecond), report.TotalDuration.Round(time.Millisecond))
+	out.Printf("Timing: load/preflight %s; total %s\nCoverage: final image only; package counts are observations, not verified totals.\n", report.LoadDuration.Round(time.Millisecond), report.TotalDuration.Round(time.Millisecond))
 	return out.Err()
 }
 
@@ -55,7 +74,11 @@ func renderImageText(cmd *cobra.Command, opts *commandOptions, report inventory.
 // error text is shown separately so a kept file is never reported as missing.
 func renderImageSBOM(out *printer, report inventory.ImageReport) {
 	if result := report.Result; result != nil {
-		out.Printf("SBOM: %s\nSyft: %s; %d unique packages observed (%d conda, %d installed Python metadata, %d other); %d unknown file coordinates\n", lintText(result.Path), syftVersion(result.SyftVersion), result.Total, result.Conda, result.PythonInstalled, result.Other, result.Unknowns)
+		if result.PreExisting {
+			out.Printf("SBOM: pre-existing (not rescanned): %s\n", lintText(result.Path))
+		} else {
+			out.Printf("SBOM: %s\nSyft: %s; %d unique packages observed (%d conda, %d installed Python metadata, %d other); %d unknown file coordinates\n", lintText(result.Path), syftVersion(result.SyftVersion), result.Total, result.Conda, result.PythonInstalled, result.Other, result.Unknowns)
+		}
 		if report.ScanError != "" {
 			out.Printf("SBOM warning: %s\n", lintText(report.ScanError))
 		}

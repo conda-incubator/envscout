@@ -2,6 +2,7 @@
 /bin/
 /sboms/
 /.go-rattler-native/
+/.tmp/
 *.tar
 
 # rust

@@ -68,12 +68,30 @@ func TestWriteEnvironment(t *testing.T) {
 	if !found {
 		t.Fatalf("missing conda package in SBOM: %s", data)
 	}
-	if _, err := WriteEnvironment(context.Background(), env, output); err == nil {
-		t.Fatal("existing SBOM should not be overwritten")
+	existing, err := WriteEnvironment(context.Background(), env, output)
+	if err != nil || !existing.PreExisting || existing.Path != result.Path || existing.Total != 0 || existing.SyftVersion != "" {
+		t.Fatalf("existing SBOM should be skipped without recataloging or invented counts: %+v %v", existing, err)
 	}
 	again, err := os.ReadFile(result.Path)
 	if err != nil || string(again) != string(data) {
 		t.Fatal("existing SBOM was changed")
+	}
+}
+
+func TestWriteEnvironmentExistingDirectoryIsNotASBOM(t *testing.T) {
+	prefix := t.TempDir()
+	env := discovery.Environment{Name: "env", Path: prefix, Kind: discovery.KindConda}
+	output := t.TempDir()
+	if err := os.Mkdir(filepath.Join(output, Filename(env)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := WriteEnvironment(context.Background(), env, output)
+	if err == nil || result.PreExisting {
+		t.Fatalf("a directory collision is not a pre-existing SBOM: %+v %v", result, err)
+	}
+	info, err := os.Lstat(filepath.Join(output, Filename(env)))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("directory collision must leave the directory intact: %v", err)
 	}
 }
 

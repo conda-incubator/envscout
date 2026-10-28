@@ -22,6 +22,7 @@ type commandOptions struct {
 	format    string
 	platform  string
 	noColor   bool
+	verbose   bool
 	outputDir string
 }
 
@@ -39,12 +40,16 @@ func New() *cobra.Command {
 	flags.Var(newEnumValue(&opts.format, "text", "json"), "format", "output format: text or json")
 	flags.StringVar(&opts.platform, "platform", "", "required for oci-archive: OS/ARCH[/VARIANT]")
 	flags.BoolVar(&opts.noColor, "no-color", false, "disable colored output")
+	flags.BoolVar(&opts.verbose, "verbose", false, "show individual discovery warnings (find only)")
 	flags.StringVar(&opts.outputDir, "output-dir", opts.outputDir, "directory for SBOM output (scan only)")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return inputError(err) })
 	// Only scan writes SBOMs, so an explicit --output-dir elsewhere would be silently ignored.
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		if cmd.Name() != "scan" && cmd.Flags().Changed("output-dir") {
 			return inputError(fmt.Errorf("--output-dir is only valid for scan"))
+		}
+		if cmd.Name() != "find" && cmd.Flags().Changed("verbose") {
+			return inputError(fmt.Errorf("--verbose is only valid for find"))
 		}
 		return nil
 	}
@@ -129,14 +134,17 @@ func renderFind(cmd *cobra.Command, opts *commandOptions, report discovery.Repor
 		return err
 	}
 	warnings := newPrinter(cmd.ErrOrStderr())
-	renderIssues(warnings, "", report.Issues)
-	if err := warnings.Err(); err != nil {
-		return err
+	if opts.verbose {
+		renderIssues(warnings, "", report.Issues)
 	}
 	if len(report.Issues) > 0 {
-		return fmt.Errorf("discovery incomplete: %d path(s) could not be inspected", len(report.Issues))
+		warnings.Printf("discovery incomplete: %d path(s) could not be inspected", len(report.Issues))
+		if !opts.verbose {
+			warnings.Printf("; use --verbose to see details")
+		}
+		warnings.Println()
 	}
-	return nil
+	return warnings.Err()
 }
 
 func renderFindText(cmd *cobra.Command, opts *commandOptions, report discovery.Report) error {
@@ -158,7 +166,24 @@ func renderFindText(cmd *cobra.Command, opts *commandOptions, report discovery.R
 		}
 		rows = append(rows, []string{lintText(env.Name), lintText(env.Kind), revision, lintText(env.Path)})
 	}
-	return printRows(cmd.OutOrStdout(), []string{"NAME", "TYPE", "REV", "LOCATION"}, rows)
+	if err := printRows(cmd.OutOrStdout(), []string{"NAME", "TYPE", "REV", "LOCATION"}, rows); err != nil {
+		return err
+	}
+	out.Printf("\nSummary: %s\n", environmentSummary(report.Environments))
+	return out.Err()
+}
+
+func environmentSummary(environments []discovery.Environment) string {
+	conda, venv := 0, 0
+	for _, env := range environments {
+		switch env.Kind {
+		case discovery.KindConda:
+			conda++
+		case discovery.KindVenv:
+			venv++
+		}
+	}
+	return fmt.Sprintf("%d environments found (%d conda, %d venv)", len(environments), conda, venv)
 }
 
 // printRows writes an aligned table with a header row, two spaces between columns.
