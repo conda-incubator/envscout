@@ -530,7 +530,7 @@ func (p *prober) prefix(path string) {
 	defer func() { _ = root.Close() }()
 	env, valid, issues := inspectScopedPrefix(p.ctx, root, path, true)
 	for _, issue := range issues {
-		p.col.addIssue(issue.Path, errors.New(issue.Error))
+		p.col.addRecordedIssue(issue)
 	}
 	if valid {
 		p.col.addEnvironment(env)

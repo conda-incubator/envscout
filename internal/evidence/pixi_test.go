@@ -3,6 +3,8 @@ package evidence
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,6 +68,41 @@ func TestHostInstalledLockNoMarkerIsNotApplicable(t *testing.T) {
 	snapshot, err := CollectHost(context.Background(), []string{hostPrefix(t)}, Request{Capabilities: []string{"installed-lock"}})
 	if err != nil || snapshot.Targets[0].Lock != nil || snapshot.Targets[0].Coverage["installed-lock"] != Complete {
 		t.Fatalf("no marker is not an unknown comparison: %+v %v", snapshot, err)
+	}
+}
+
+func TestHostInspectionCountsAssociatedLockAccessFailure(t *testing.T) {
+	prefix := hostPrefix(t)
+	project := t.TempDir()
+	lock := filepath.Join(project, "pixi.lock")
+	hostWrite(t, lock, hostPixiLock)
+	hostPixiMarker(t, prefix, project, "linux-64")
+	if err := os.Chmod(lock, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(lock, 0o644) }()
+	if _, err := os.ReadFile(lock); !errors.Is(err, os.ErrPermission) {
+		t.Skipf("filesystem permissions do not deny lock reads: %v", err)
+	}
+	snapshot, err := CollectHost(context.Background(), []string{prefix}, Request{Capabilities: []string{"installed-lock"}})
+	if err != nil || snapshot.Inspection.Inspected != 0 || snapshot.Inspection.Failed != 1 || snapshot.Inspection.AccessErrors == 0 {
+		t.Fatalf("permission failures outside discovery roots must count: %+v %v", snapshot.Inspection, err)
+	}
+}
+
+func TestHostInspectionCountsFatalProjectAccessFailure(t *testing.T) {
+	prefix := hostPrefix(t)
+	project := t.TempDir()
+	if err := os.Chmod(project, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(project, 0o755) }()
+	if _, err := os.ReadDir(project); !errors.Is(err, os.ErrPermission) {
+		t.Skipf("filesystem permissions do not deny project inspection: %v", err)
+	}
+	snapshot, err := CollectHost(context.Background(), []string{prefix}, Request{Capabilities: []string{"project-association"}, Project: project})
+	if !errors.Is(err, os.ErrPermission) || snapshot.Inspection.Inspected != 0 || snapshot.Inspection.Failed != 1 || snapshot.Inspection.AccessErrors != 1 {
+		t.Fatalf("terminal project access failure must not become unfinished: %+v %v", snapshot.Inspection, err)
 	}
 }
 

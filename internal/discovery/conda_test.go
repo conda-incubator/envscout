@@ -2,6 +2,8 @@ package discovery
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +43,17 @@ func TestFindRecognizesEnvironmentAndHistory(t *testing.T) {
 	}
 	if len(report.Roots) != 2 || report.Roots[0] != root {
 		t.Fatalf("requested roots not preserved in order: %+v", report.Roots)
+	}
+}
+
+func TestDiscoveryIssuesPreserveAccessErrorClassification(t *testing.T) {
+	report := newReport(ModeRoots)
+	col := newCollector(&report)
+	col.addIssue("denied", fmt.Errorf("enumerate: %w", os.ErrPermission))
+	col.addRecordedIssue(issueFromError("marker", &os.PathError{Op: "open", Path: "pyvenv.cfg", Err: os.ErrPermission}))
+	col.addIssue("invalid", errors.New("history is not a regular file"))
+	if len(report.Issues) != 3 || !report.Issues[0].AccessDenied || !report.Issues[1].AccessDenied || report.Issues[2].AccessDenied {
+		t.Fatalf("permission classification must survive conversion without parsing strings: %+v", report.Issues)
 	}
 }
 

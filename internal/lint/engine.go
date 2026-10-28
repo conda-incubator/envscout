@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/conda-incubator/envscout/internal/discovery"
 	"github.com/conda-incubator/envscout/internal/evidence"
 )
 
@@ -127,6 +128,7 @@ func BuildPolicy(config Policy, options Options) (Policy, error) {
 // assertions are always included, even when no selected rule consumes them.
 func Requirements(policy Policy) evidence.Request {
 	caps := make(map[string]bool)
+	venvCaps := make(map[string]bool)
 	if policy.RuntimePrefix != "" {
 		caps["runtime-config"] = true
 	}
@@ -140,12 +142,21 @@ func Requirements(policy Policy) evidence.Request {
 		for _, capability := range rule.Capabilities {
 			caps[capability] = true
 		}
+		if policy.Source == "dir" {
+			for _, capability := range rule.VirtualenvCapabilities {
+				venvCaps[capability] = true
+			}
+		}
 	}
 	request := evidence.Request{Capabilities: make([]string, 0, len(caps)), RuntimePrefix: policy.RuntimePrefix, Project: policy.Project}
 	for capability := range caps {
 		request.Capabilities = append(request.Capabilities, capability)
 	}
+	for capability := range venvCaps {
+		request.VirtualenvCapabilities = append(request.VirtualenvCapabilities, capability)
+	}
 	slices.Sort(request.Capabilities)
+	slices.Sort(request.VirtualenvCapabilities)
 	return request
 }
 
@@ -198,7 +209,7 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 		Source: policy.Source, RuntimePrefix: policy.RuntimePrefix, Project: policy.Project,
 		StartedAt: snapshot.Started, EvaluatedAt: now.UTC(), Policy: policy, Status: "completed", Limits: ReportLimits{MaxSamples, MaxFindings},
 		Targets: []TargetReport{}, Outcomes: []Outcome{}, OutcomeCounts: zeroCounts(), Findings: []Finding{},
-		Issues: slices.Clone(snapshot.Issues), SuppressionNotes: []SuppressionNote{}}
+		Issues: slices.Clone(snapshot.Issues), SuppressionNotes: []SuppressionNote{}, Inspection: snapshot.Inspection}
 	if r.Issues == nil {
 		r.Issues = []evidence.Issue{}
 	}
@@ -219,7 +230,11 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 	slices.SortFunc(targets, func(a, b evidence.Target) int { return strings.Compare(a.ID, b.ID) })
 	var peers []evidence.Prefix
 	for _, target := range targets {
-		peers = append(peers, target.Prefixes...)
+		for _, prefix := range target.Prefixes {
+			if prefix.Kind != discovery.KindVenv {
+				peers = append(peers, prefix)
+			}
+		}
 	}
 	checks := map[string]func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding){}
 	for _, rule := range registry {
@@ -277,13 +292,21 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 // History coverage is non-fatal and an unassociated project is allowed.
 func targetIssues(target evidence.Target, policy Policy, request evidence.Request) []evidence.Issue {
 	var issues []evidence.Issue
+	if target.IsVirtualenv() {
+		request = request.ForEnvironment(discovery.KindVenv)
+		for _, rule := range registry {
+			if ruleEnabled(policy, rule.ID) && rule.Available && len(rule.VirtualenvCapabilities) == 0 {
+				issues = append(issues, evidence.Issue{Capability: "evaluation", Path: target.Input, Message: rule.ID + " virtualenv lint is not supported yet"})
+			}
+		}
+	}
 	if target.Kind != policy.Source {
 		issues = append(issues, evidence.Issue{Capability: "evaluation", Path: target.ID, Message: "snapshot target source does not match effective policy"})
 	}
 	if policy.RuntimePrefix != "" && target.RuntimePrefix != policy.RuntimePrefix {
 		issues = append(issues, evidence.Issue{Capability: "runtime-config", Path: target.ID, Message: "asserted runtime prefix was not verified in target evidence"})
 	}
-	if policy.Project != "" && (target.Project == nil || !target.Project.Associated || target.Project.Path != policy.Project) {
+	if policy.Project != "" && !target.IsVirtualenv() && (target.Project == nil || !target.Project.Associated || target.Project.Path != policy.Project) {
 		issues = append(issues, evidence.Issue{Capability: "project-association", Path: target.ID, Message: "explicit project association was not verified in target evidence"})
 	}
 	for _, capability := range request.Capabilities {
@@ -343,6 +366,8 @@ func evaluateRule(target evidence.Target, policy Policy, rule Rule) (Outcome, []
 		outcome.Status, outcome.Reason = Unavailable, rule.UnavailableReason
 	case !slices.Contains(rule.TargetKinds, target.Kind):
 		outcome.Status, outcome.Reason = NotApplicable, "rule does not apply to this source kind"
+	case target.IsVirtualenv() && len(rule.VirtualenvCapabilities) == 0:
+		outcome.Status, outcome.Reason = Unknown, "virtualenv lint is not supported yet for this rule"
 	case rule.Check == nil:
 		outcome.Status, outcome.Reason = Unknown, "rule has no evaluation entry"
 	default:

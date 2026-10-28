@@ -50,7 +50,7 @@ func collectHostPixi(ctx context.Context, target *Target, req Request) {
 	if err != nil {
 		if Requested(req, "installed-lock") {
 			target.Lock = &LockComparison{Prefix: prefix.Path, Reason: "Pixi marker filesystem unavailable"}
-			hostIssue(target, "installed-lock", prefix.Path, target.Lock.Reason)
+			hostIssue(target, "installed-lock", prefix.Path, target.Lock.Reason, err)
 		}
 		return
 	}
@@ -60,15 +60,15 @@ func collectHostPixi(ctx context.Context, target *Target, req Request) {
 		return // no marker is an explicit not-applicable fact
 	}
 	comparison := &LockComparison{Prefix: prefix.Path}
-	unknown := func(reason, path string) {
+	unknown := func(reason, path string, causes ...error) {
 		comparison.Reason = reason
 		if Requested(req, "installed-lock") {
 			target.Lock = comparison
-			hostIssue(target, "installed-lock", path, reason)
+			hostIssue(target, "installed-lock", path, reason, causes...)
 		}
 	}
 	if err != nil {
-		unknown("Pixi marker is not readable bounded regular metadata", filepath.Join(prefix.Path, "conda-meta/pixi"))
+		unknown("Pixi marker is not readable bounded regular metadata", filepath.Join(prefix.Path, "conda-meta/pixi"), err)
 		return
 	}
 	marker, err := inventory.ParsePixiMarker(data)
@@ -95,18 +95,18 @@ func collectHostPixi(ctx context.Context, target *Target, req Request) {
 	}
 	info, err := os.Lstat(project)
 	if err != nil || !info.IsDir() {
-		unknown("marker-associated project is inaccessible or linked", project)
+		unknown("marker-associated project is inaccessible or linked", project, err)
 		return
 	}
 	projectRoot, err := os.OpenRoot(project)
 	if err != nil {
-		unknown("marker-associated project is unavailable", project)
+		unknown("marker-associated project is unavailable", project, err)
 		return
 	}
 	lock, err := readHostMetadata(ctx, projectRoot, "pixi.lock", hostMetadataLimit)
 	_ = projectRoot.Close()
 	if err != nil || len(lock) == 0 {
-		unknown("selected Pixi lock is unavailable, linked, empty, or oversized", comparison.Path)
+		unknown("selected Pixi lock is unavailable, linked, empty, or oversized", comparison.Path, err)
 		return
 	}
 	// Selection is exact, including marker subdir. LockSync asserts a complete

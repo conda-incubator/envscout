@@ -1,4 +1,4 @@
-Lint | profile local | ruleset 5
+Lint | profile local | ruleset 6
 Target: file:///golden/env (1 prefixes)
 ENV003 info file:///golden/env
   Found: 1 Python distribution metadata entries at `/golden/env/lib/python3.14/site-packages/click-8.dist-info/METADATA` have no conda owner, evidence of installation outside conda. Packages outside conda's file ownership are not managed by conda's dependency solver.
@@ -6,7 +6,7 @@ ENV003 info file:///golden/env
   Next: Record intentional pip dependencies in the project specification; install conda dependencies first and pip dependencies last when recreating the environment.
 Summary: completed; 1 targets; 1 findings; 0 unknown
 
-Lint | profile local | ruleset 5
+Lint | profile local | ruleset 6
 Target: file:///golden/env (1 prefixes)
 ENV004 info file:///golden/env
   Found: Python distribution numpy version 3 differs from its owning conda package numpy version 2. Metadata at `/golden/env/conda-meta/numpy.json`, `/golden/env/lib/python3.14/site-packages/numpy-3.dist-info/METADATA`. Different versions of one distribution can leave conda's recorded state inconsistent with Python package metadata.
@@ -15,7 +15,7 @@ ENV004 info file:///golden/env
   Next: Recreate the environment with one owner for the conflicting package; avoid installing a different pip version over a conda-managed distribution.
 Summary: completed; 1 targets; 1 findings; 0 unknown
 
-Lint | profile local | ruleset 5
+Lint | profile local | ruleset 6
 Target: file:///golden/env (1 prefixes)
 ENV005 info file:///golden/env
   Found: The tooling/base candidate at `/golden/env` contains 1 packages not required by its installed conda, mamba or micromamba tools, recorded at `/golden/env`, `/golden/env/conda-meta/numpy.json`. Application dependencies in the installer environment couple its maintenance to project dependencies.
@@ -24,7 +24,7 @@ ENV005 info file:///golden/env
   Next: Create a separate project environment with `conda create --name PROJECT PACKAGE...` and keep the installer environment focused on its tooling.
 Summary: completed; 1 targets; 1 findings; 0 unknown
 
-Lint | profile local | ruleset 5
+Lint | profile local | ruleset 6
 Target: file:///golden/env (2 prefixes)
 ENV006 info file:///golden/env
   Found: Prefixes `/golden/env`, `/golden/other` have matching conda package metadata for 1 packages, including version, build, channel, subdir and reported hashes. Repeated conda package sets may duplicate environment maintenance and disk usage.
@@ -33,7 +33,7 @@ ENV006 info file:///golden/env
   Next: Review the listed prefixes and remove an unused one with `conda env remove --prefix PATH` only after checking its project references.
 Summary: completed; 1 targets; 1 findings; 0 unknown
 
-Lint | profile local | ruleset 5
+Lint | profile local | ruleset 6
 Target: file:///golden/env (1 prefixes)
 ENV007 warning file:///golden/env
   Found: The prefix `/golden/env` contains 1 packages from the official defaults channels (main, r or msys2) and 1 from conda-forge, recorded at `/golden/env`, `/golden/env/conda-meta/numpy.json`, `/golden/env/conda-meta/python.json`. Mixing defaults and conda-forge can combine packages built against different dependency assumptions.
@@ -43,7 +43,7 @@ ENV007 warning file:///golden/env
   Next: Choose one channel family, set strict channel priority, and recreate the environment; for conda-forge use `conda create --override-channels -c conda-forge --strict-channel-priority --name PROJECT PACKAGE...`.
 Summary: completed; 1 targets; 1 findings; 0 unknown
 
-Lint | profile local | ruleset 5
+Lint | profile local | ruleset 6
 Target: file:///golden/env (1 prefixes)
 ENV008 info file:///golden/env
   Found: Host package-cache entries at `/golden/cache/numpy-2-0`, `/golden/cache/numpy-2-0.conda` include 1 archives (2048 file payload bytes) and 1 extracted package directories whose sizes were not measured. Cached downloads and extracted packages consume space and can be shared by several environments.
@@ -52,7 +52,7 @@ ENV008 info file:///golden/env
   Next: Review `conda clean --tarballs --dry-run` and `conda clean --packages --dry-run` before cleaning unused cache content; preserve caches required by symlink-installed environments.
 Summary: completed; 1 targets; 1 findings; 0 unknown
 
-Lint | profile local | ruleset 5
+Lint | profile local | ruleset 6
 Target: file:///golden/env (1 prefixes)
 ENV009 warning file:///golden/env
   Found: Python 3.10.16 in `/golden/env`, recorded at `/golden/env/conda-meta/python.json`, belongs to branch 3.10 whose upstream CPython support ended 2026-10-01 (evaluated 2026-10-26). Upstream CPython no longer issues fixes for an end-of-life release series.
@@ -61,7 +61,7 @@ ENV009 warning file:///golden/env
   Next: Create and test a replacement environment with a supported Python release, for example `conda create --name PROJECT python=3.13 PACKAGE...`.
 Summary: completed; 1 targets; 1 findings; 0 unknown
 
-Lint | profile local | ruleset 5
+Lint | profile local | ruleset 6
 Target: file:///golden/env (1 prefixes)
 ENV010 warning file:///golden/env
   Found: Installed conda package metadata in `/golden/env` differs from `/golden/project/pixi.lock` (environment default, subdir linux-64): 0 missing, 0 extra, 1 changed. Installed conda package metadata differs from the Pixi lock selection used for this prefix.
@@ -71,7 +71,7 @@ ENV010 warning file:///golden/env
   Next: Run `pixi install --environment ENVIRONMENT` in the project that owns the prefix, then repeat this check.
 Summary: completed; 1 targets; 1 findings; 0 unknown
 
-Lint | profile local | ruleset 5
+Lint | profile local | ruleset 6
 Target: file:///golden/env (1 prefixes)
 ENV012 info file:///golden/env
   Found: The prefix `/golden/env` has 1 requested package specs with no version constraint, recorded at `/golden/env`, `/golden/env/conda-meta/numpy.json`. An unconstrained request can select a different version when the environment is recreated.

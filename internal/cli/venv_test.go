@@ -135,8 +135,8 @@ func TestMixedEnvironmentLintKeepsCondaFindings(t *testing.T) {
 	cmd.SetErr(&bytes.Buffer{})
 	cmd.SetArgs([]string{"lint", "--rule", "ENV013", "--format", "json", root})
 	err := cmd.Execute()
-	if ExitCode(err) != 2 {
-		t.Fatalf("mixed unsupported virtualenv lint must report incomplete inspection: %v\n%s", err, out.String())
+	if ExitCode(err) != 1 {
+		t.Fatalf("mixed virtualenv lint must keep the conda warning without an unsupported issue: %v\n%s", err, out.String())
 	}
 	var report struct {
 		Status   string `json:"status"`
@@ -147,12 +147,70 @@ func TestMixedEnvironmentLintKeepsCondaFindings(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.Status != "incomplete" || len(report.Findings) != 1 || report.Findings[0].Rule != "ENV013" {
-		t.Fatalf("unsupported virtualenv must not erase supported conda evidence: %s", out.String())
+	if report.Status != "completed" || len(report.Findings) != 1 || report.Findings[0].Rule != "ENV013" {
+		t.Fatalf("virtualenv must not erase supported conda evidence: %s", out.String())
 	}
 }
 
-func TestLintVirtualenvExplicitlyUnsupported(t *testing.T) {
+func TestLintENV013VirtualenvCertifi(t *testing.T) {
+	for _, layout := range []string{"lib/python3.13/site-packages", "Lib/site-packages"} {
+		for _, test := range []struct {
+			version string
+			code    int
+		}{
+			{"2026.7.22", 1},
+			{"2026.10.18rc1", 1},
+			{"2026.10.18", 0},
+			{"2026.10.18.post1", 0},
+		} {
+			t.Run(layout+"/"+test.version, func(t *testing.T) {
+				root := t.TempDir()
+				prefix := venvFixture(t, root, ".venv", false)
+				metadata := filepath.Join(prefix, layout, "certifi-"+test.version+".dist-info", "METADATA")
+				if err := os.MkdirAll(filepath.Dir(metadata), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(metadata, []byte("Metadata-Version: 2.1\nName: certifi\nVersion: "+test.version+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				output, err := executeLint(t, "--rule", "ENV013", "--format", "json", root)
+				if ExitCode(err) != test.code {
+					t.Fatalf("virtualenv certifi check: %v\n%s", err, output)
+				}
+				var report struct {
+					Status   string `json:"status"`
+					Findings []struct {
+						Next     string `json:"next"`
+						Evidence struct {
+							Paths []string `json:"paths"`
+						} `json:"evidence"`
+					} `json:"findings"`
+				}
+				if err := json.Unmarshal([]byte(output), &report); err != nil {
+					t.Fatal(err)
+				}
+				if report.Status != "completed" || len(report.Findings) != test.code {
+					t.Fatalf("unexpected virtualenv certificate report: %s", output)
+				}
+				for _, finding := range report.Findings {
+					if len(finding.Evidence.Paths) != 1 || finding.Evidence.Paths[0] != metadata || !strings.Contains(finding.Next, "pip") || !strings.Contains(finding.Next, "certifi>=2026.10.18") || strings.Contains(finding.Next, "conda install") {
+						t.Fatalf("virtualenv needs its own metadata path and remediation: %s", output)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestLintENV013VirtualenvWithoutCertifi(t *testing.T) {
+	prefix := venvFixture(t, t.TempDir(), ".venv", true)
+	findings, status := lintENV013JSON(t, prefix)
+	if len(findings) != 0 || status != "not_applicable" {
+		t.Fatalf("virtualenv without local certifi is not applicable: %s %+v", status, findings)
+	}
+}
+
+func TestLintVirtualenvUnsupportedRulesRemainExplicit(t *testing.T) {
 	root := t.TempDir()
 	prefix := venvFixture(t, root, ".venv", true)
 	cmd := New()
@@ -162,7 +220,7 @@ func TestLintVirtualenvExplicitlyUnsupported(t *testing.T) {
 	cmd.SetArgs([]string{"lint", "--format", "json", prefix})
 	err := cmd.Execute()
 	if ExitCode(err) != 2 || !strings.Contains(out.String(), "virtualenv lint is not supported") || strings.Contains(out.String(), "no valid conda package metadata") {
-		t.Fatalf("unsupported virtualenv lint must be explicit rather than a false pass or conda error: %v\n%s", err, out.String())
+		t.Fatalf("unsupported virtualenv rules must be explicit rather than a false pass or conda error: %v\n%s", err, out.String())
 	}
 	var report struct {
 		Status   string            `json:"status"`

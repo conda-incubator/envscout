@@ -32,10 +32,14 @@ const (
 
 var hostPythonVersionDirectory = regexp.MustCompile(`^python[0-9]+\.[0-9]+t?$`)
 
-func hostIssue(target *Target, capability, path, message string) {
+func hostIssue(target *Target, capability, path, message string, causes ...error) {
 	target.Coverage[capability] = Partial
 	if len(target.Issues) < hostEntryLimit {
-		target.Issues = append(target.Issues, Issue{Capability: capability, Path: path, Message: message})
+		issue := Issue{Capability: capability, Path: path, Message: message}
+		for _, err := range causes {
+			issue.AccessDenied = issue.AccessDenied || errors.Is(err, fs.ErrPermission)
+		}
+		target.Issues = append(target.Issues, issue)
 	}
 }
 
@@ -233,6 +237,7 @@ func (r *hostFileResolver) FileContentsByLocation(location file.Location) (io.Re
 	}
 	r.readBytes += info.Size()
 	data, err := readHostMetadata(r.ctx, r.root, name, limit)
+	r.issue = errors.Join(r.issue, err)
 	return io.NopCloser(bytes.NewReader(data)), err
 }
 
@@ -240,30 +245,39 @@ func collectHostPython(ctx context.Context, target *Target) {
 	prefix := target.Prefixes[0]
 	root, err := os.OpenRoot(prefix.Path)
 	if err != nil {
-		hostIssue(target, "python-distributions", prefix.Path, "Python filesystem unavailable")
+		hostIssue(target, "python-distributions", prefix.Path, "Python filesystem unavailable", err)
 		return
 	}
 	defer func() { _ = root.Close() }()
 	r := &hostFileResolver{ctx: ctx, root: root, base: prefix.Path, files: map[string]fs.FileInfo{}}
 	var installations []string
 	for _, parent := range []string{"lib", "lib64"} {
+		// Linux venvs commonly alias lib64 to lib; it adds no installation root.
+		if parent == "lib64" && target.IsVirtualenv() {
+			alias, err := root.Readlink(parent)
+			if err == nil && alias == "lib" {
+				if info, err := hostLstat(root, "lib"); err == nil && info.IsDir() {
+					continue
+				}
+			}
+		}
 		info, err := hostLstat(root, parent)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil || !info.IsDir() {
-			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, parent), "Python installation directory is unavailable or linked")
+			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, parent), "Python installation directory is unavailable or linked", err)
 			continue
 		}
 		dir, err := root.Open(parent)
 		if err != nil {
-			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, parent), "Python installation directory could not be enumerated")
+			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, parent), "Python installation directory could not be enumerated", err)
 			continue
 		}
 		entries, readErr := dir.ReadDir(hostEntryLimit + 1)
 		_ = dir.Close()
 		if readErr != nil && !errors.Is(readErr, io.EOF) || len(entries) > hostEntryLimit {
-			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, parent), "Python installation directory entry limit or enumeration failure")
+			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, parent), "Python installation directory entry limit or enumeration failure", readErr)
 		}
 		if len(entries) > hostEntryLimit {
 			entries = entries[:hostEntryLimit]
@@ -282,7 +296,7 @@ func collectHostPython(ctx context.Context, target *Target) {
 			continue
 		}
 		if err := indexHostPython(ctx, root, installation, r, target, &visited); err != nil {
-			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, installation), err.Error())
+			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, installation), err.Error(), err)
 		}
 		if ctx.Err() != nil || visited > hostPathLimit {
 			break
@@ -291,7 +305,7 @@ func collectHostPython(ctx context.Context, target *Target) {
 	sort.Strings(r.paths)
 	packages, _, err := python.NewInstalledPackageCataloger().Catalog(ctx, r)
 	if err != nil || r.issue != nil {
-		hostIssue(target, "python-distributions", prefix.Path, "installed Python metadata catalog is incomplete")
+		hostIssue(target, "python-distributions", prefix.Path, "installed Python metadata catalog is incomplete", err, r.issue)
 	}
 	owners := map[string]string{}
 	ambiguous := map[string]bool{}
@@ -387,12 +401,12 @@ func collectHostCache(ctx context.Context, target *Target, caches map[string]Tar
 			continue // recorded build-host paths need not still exist
 		}
 		if err != nil || !info.IsDir() {
-			hostIssue(target, "host-cache", path, "cache root is inaccessible or linked")
+			hostIssue(target, "host-cache", path, "cache root is inaccessible or linked", err)
 			continue
 		}
 		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil {
-			hostIssue(target, "host-cache", path, "cache root could not be resolved")
+			hostIssue(target, "host-cache", path, "cache root could not be resolved", err)
 			continue
 		}
 		if seenRoots[resolved] {
@@ -436,19 +450,19 @@ func applyHostCache(target *Target, facts Target) {
 func scanHostCache(ctx context.Context, target *Target, path string, visited *int) {
 	root, err := os.OpenRoot(path)
 	if err != nil {
-		hostIssue(target, "host-cache", path, "cache root is not a readable directory")
+		hostIssue(target, "host-cache", path, "cache root is not a readable directory", err)
 		return
 	}
 	entries, err := root.Open(".")
 	if err != nil {
 		_ = root.Close()
-		hostIssue(target, "host-cache", path, "cache directory could not be enumerated")
+		hostIssue(target, "host-cache", path, "cache directory could not be enumerated", err)
 		return
 	}
 	children, readErr := entries.ReadDir(hostEntryLimit + 1)
 	_ = entries.Close()
 	if readErr != nil || len(children) > hostEntryLimit {
-		hostIssue(target, "host-cache", path, "cache directory entry limit or enumeration failure")
+		hostIssue(target, "host-cache", path, "cache directory entry limit or enumeration failure", readErr)
 	}
 	if len(children) > hostEntryLimit {
 		children = children[:hostEntryLimit]
@@ -474,7 +488,7 @@ func scanHostCache(ctx context.Context, target *Target, path string, visited *in
 			}
 			info, err := child.Info()
 			if err != nil || !info.Mode().IsRegular() || info.Size() < 0 {
-				hostIssue(target, "host-cache", filepath.Join(path, name), "archive is not a readable regular file")
+				hostIssue(target, "host-cache", filepath.Join(path, name), "archive is not a readable regular file", err)
 				continue
 			}
 			target.Archives = append(target.Archives, Artifact{Path: filepath.Join(path, name), Kind: "archive", Bytes: info.Size()})
@@ -486,7 +500,7 @@ func scanHostCache(ctx context.Context, target *Target, path string, visited *in
 			continue
 		}
 		if err != nil {
-			hostIssue(target, "host-cache", filepath.Join(path, marker), "cache marker is not bounded regular metadata")
+			hostIssue(target, "host-cache", filepath.Join(path, marker), "cache marker is not bounded regular metadata", err)
 			continue
 		}
 		if _, err := gorattler.ParseIndexJSON(data); err != nil {

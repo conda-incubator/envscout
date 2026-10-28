@@ -1,4 +1,4 @@
-Lint | profile container-distroless | ruleset 5
+Lint | profile container-distroless | ruleset 6
 Target: oci-archive:golden-image (1 prefixes)
 Check ENV013 unknown: prefix discovery or conda record coverage is incomplete
 Check IMG001 unknown: required final-cache coverage is not complete; absence was not established

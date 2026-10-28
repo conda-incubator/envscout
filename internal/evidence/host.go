@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -28,17 +29,27 @@ func FileID(filename string) string {
 
 // CollectHost requires explicit roots and never invokes an external tool.
 // Without requested collectors it only lists the root targets. With collectors,
-// discovery returns candidate prefixes, which are validated through the conda-only
-// inventory pathway before any of them counts as positive evidence.
+// discovery returns conda prefixes validated through inventory and marker-backed
+// virtualenvs only when selected rules request virtualenv evidence.
 func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, error) {
-	snapshot := Snapshot{Started: time.Now().UTC(), Targets: []Target{}, Issues: []Issue{}}
+	snapshot := Snapshot{Started: time.Now().UTC(), Targets: []Target{}, Issues: []Issue{}, Inspection: &InspectionSummary{}}
+	// Count observed access failures even when cancellation stops an attempt.
+	defer func() {
+		for _, target := range snapshot.Targets {
+			for _, issue := range target.Issues {
+				if issue.AccessDenied {
+					snapshot.Inspection.AccessErrors++
+				}
+			}
+		}
+	}()
 	if len(roots) == 0 {
 		return snapshot, fmt.Errorf("lint requires explicit directory roots")
 	}
 	if err := ctx.Err(); err != nil {
 		return snapshot, err
 	}
-	if len(req.Capabilities) == 0 {
+	if len(req.Capabilities) == 0 && len(req.VirtualenvCapabilities) == 0 {
 		seen := make(map[string]bool)
 		for _, input := range roots {
 			abs, err := filepath.Abs(input)
@@ -64,12 +75,24 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 	}
 	readHistory := Requested(req, "history")
 	report, discoveryErr := discovery.Find(ctx, roots, readHistory)
+	snapshot.Inspection = &InspectionSummary{Found: len(report.Environments), DiscoveryIssues: len(report.Issues)}
+	if errors.Is(discoveryErr, fs.ErrPermission) {
+		snapshot.Inspection.AccessErrors++
+	}
+	progress := progressFrom(ctx)
+	if progress != nil {
+		progress.Total.Store(uint64(len(report.Environments)))
+		progress.Started.Store(true)
+	}
 	for _, issue := range report.Issues {
+		if issue.AccessDenied {
+			snapshot.Inspection.AccessErrors++
+		}
 		capability := "prefixes"
 		if filepath.Base(issue.Path) == "history" {
 			capability = "history"
 		}
-		snapshot.Issues = append(snapshot.Issues, Issue{Capability: capability, Path: issue.Path, Message: issue.Error})
+		snapshot.Issues = append(snapshot.Issues, Issue{Capability: capability, Path: issue.Path, Message: issue.Error, AccessDenied: issue.AccessDenied})
 	}
 	readHistoryCoverage := NotCollected
 	if readHistory {
@@ -85,20 +108,37 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			cancelErr = err
 			break
 		}
-		// Venvs are not conda prefixes. Skip them before any conda metadata, Python,
-		// cache, or lock read so their presence is an explicit unsupported issue.
+		// Venvs never enter conda validation or its cache and lock collectors.
 		if env.Kind == discovery.KindVenv {
-			snapshot.Issues = append(snapshot.Issues, Issue{Capability: "evaluation", Path: env.Path, Message: "virtualenv lint is not supported; use find or scan"})
+			if len(req.VirtualenvCapabilities) == 0 {
+				snapshot.Issues = append(snapshot.Issues, Issue{Capability: "evaluation", Path: env.Path, Message: "virtualenv lint is not supported by the selected rules; use find or scan"})
+				snapshot.Inspection.Failed++
+				progress.finish(true)
+			} else {
+				validated = append(validated, Target{ID: FileID(env.Path), Kind: "dir", Input: env.Path, Roots: report.Roots,
+					Prefixes: []Prefix{{Kind: env.Kind, Path: env.Path, RecordCoverage: NotCollected}}, Coverage: map[string]string{}, Issues: []Issue{}})
+			}
 			continue
 		}
+		if progress != nil {
+			progress.Active.Store(1)
+		}
 		records, err := condaRecordsForPrefix(ctx, env.Path)
+		if progress != nil {
+			progress.Active.Store(0)
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			cancelErr = ctxErr
 		}
 		if err != nil {
-			snapshot.Issues = append(snapshot.Issues, Issue{Capability: "prefixes", Path: env.Path, Message: err.Error()})
+			snapshot.Issues = append(snapshot.Issues, Issue{Capability: "prefixes", Path: env.Path, Message: err.Error(), AccessDenied: errors.Is(err, fs.ErrPermission)})
+			snapshot.Inspection.AccessErrors += accessErrorCount(err)
 		}
 		if len(records) == 0 {
+			if cancelErr == nil {
+				snapshot.Inspection.Failed++
+				progress.finish(true)
+			}
 			if err == nil {
 				snapshot.Issues = append(snapshot.Issues, Issue{Capability: "prefixes", Path: env.Path, Message: "no valid conda package metadata; prefix not counted"})
 			}
@@ -112,7 +152,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 				tooling = tooling || toolingName(record.Record.Name)
 			}
 			validated = append(validated, Target{ID: FileID(env.Path), Kind: "dir", Input: env.Path, Roots: report.Roots,
-				Prefixes: []Prefix{{Path: env.Path, Revision: env.Revision, Tooling: tooling, Records: records, RecordCoverage: recordCoverage}}, Coverage: map[string]string{}, Issues: []Issue{}})
+				Prefixes: []Prefix{{Kind: env.Kind, Path: env.Path, Revision: env.Revision, Tooling: tooling, Records: records, RecordCoverage: recordCoverage}}, Coverage: map[string]string{}, Issues: []Issue{}})
 			if err != nil && Requested(req, "conda-records") {
 				hostIssue(&validated[len(validated)-1], "conda-records", env.Path, "installed conda record collection is incomplete")
 			}
@@ -143,36 +183,53 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 	}
 	for i := range snapshot.Targets {
 		target := &snapshot.Targets[i]
+		targetReq := req.ForEnvironment(target.Prefixes[0].Kind)
 		target.Coverage["prefixes"] = coverage
 		target.Coverage["history"] = historyCoverage
+		if target.IsVirtualenv() {
+			target.Coverage["history"] = NotCollected
+		}
 		if readHistory && (discoveryErr != nil || cancelErr != nil) {
 			target.Coverage["history"] = Partial
 		}
-		if Requested(req, "project-association") {
+		if Requested(targetReq, "project-association") {
 			target.Coverage["project-association"] = Complete
 		}
 		for _, capability := range []string{"conda-records", "python-distributions", "host-cache", "installed-lock"} {
 			target.Coverage[capability] = NotCollected
-			if Requested(req, capability) {
+			if Requested(targetReq, capability) {
 				target.Coverage[capability] = Complete
 			}
 		}
-		if Requested(req, "conda-records") {
+		if Requested(targetReq, "conda-records") {
 			target.Coverage["conda-records"] = target.Prefixes[0].RecordCoverage
 		}
 	}
 	// Project association uses the final validated list and runs once, only when the
 	// collection finished without cancellation.
 	if req.Project != "" && discoveryErr == nil && cancelErr == nil {
-		if len(snapshot.Targets) != 1 {
+		var projectTarget *Target
+		prefixCount := 0
+		for i := range snapshot.Targets {
+			if !snapshot.Targets[i].IsVirtualenv() {
+				projectTarget = &snapshot.Targets[i]
+				prefixCount++
+			}
+		}
+		if prefixCount != 1 {
 			return snapshot, errors.Join(discoveryErr, fmt.Errorf("--project requires exactly one validated prefix for an explicit association"))
 		}
 		if Requested(req, "project-association") {
 			project, issue, err := collectProjectContext(ctx, req.Project)
 			if err != nil {
+				snapshot.Inspection.AccessErrors += accessErrorCount(err)
+				if ctx.Err() == nil {
+					snapshot.Inspection.Failed++
+					progress.finish(true)
+				}
 				return snapshot, err
 			}
-			target := &snapshot.Targets[0]
+			target := projectTarget
 			target.Project = project
 			if issue != nil {
 				target.Issues = append(target.Issues, *issue)
@@ -191,9 +248,30 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			}
 			continue
 		}
-		if err := collectHostFacts(ctx, target, req, caches); err != nil {
+		if progress != nil {
+			progress.Active.Store(1)
+		}
+		if err := collectHostFacts(ctx, target, req.ForEnvironment(target.Prefixes[0].Kind), caches); err != nil {
 			cancelErr = errors.Join(cancelErr, err)
 		}
+		if ctx.Err() != nil {
+			if progress != nil {
+				progress.Active.Store(0)
+			}
+			continue
+		}
+		failed := len(target.Issues) != 0 || target.Prefixes[0].RecordCoverage == Partial
+		for _, issue := range report.Issues {
+			if issue.Path == filepath.Join(target.Input, "conda-meta", "history") && readHistory {
+				failed = true
+			}
+		}
+		if failed {
+			snapshot.Inspection.Failed++
+		} else {
+			snapshot.Inspection.Inspected++
+		}
+		progress.finish(failed)
 	}
 	if len(snapshot.Targets) == 0 && len(report.Roots) > 0 {
 		snapshot.Targets = append(snapshot.Targets, Target{ID: FileID(report.Roots[0]), Kind: "dir", Input: report.Roots[0], Roots: report.Roots,
@@ -203,6 +281,23 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		}
 	}
 	return snapshot, errors.Join(discoveryErr, cancelErr)
+}
+
+func accessErrorCount(err error) int {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		count := 0
+		for _, cause := range joined.Unwrap() {
+			count += accessErrorCount(cause)
+		}
+		return count
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		return accessErrorCount(cause)
+	}
+	if errors.Is(err, fs.ErrPermission) {
+		return 1
+	}
+	return 0
 }
 
 // The bounded direct metadata index never visits nested environments or follows
@@ -267,7 +362,11 @@ func collectProjectContext(ctx context.Context, input string) (*Project, *Issue,
 	if err != nil {
 		return nil, nil, err
 	}
-	if info, err := os.Lstat(abs); err != nil || !info.IsDir() {
+	info, err := os.Lstat(abs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("--project must name a real directory: %w", err)
+	}
+	if !info.IsDir() {
 		return nil, nil, fmt.Errorf("--project must name a real directory")
 	}
 	// os.OpenRoot confines every lock lookup to the project directory, so a lock
@@ -284,12 +383,12 @@ func collectProjectContext(ctx context.Context, input string) (*Project, *Issue,
 			continue
 		}
 		if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 || info.Size() == 0 {
-			return p, &Issue{Capability: "project-association", Path: filepath.Join(abs, name), Message: "lock candidate is inaccessible, empty, linked or oversized"}, nil
+			return p, &Issue{Capability: "project-association", Path: filepath.Join(abs, name), Message: "lock candidate is inaccessible, empty, linked or oversized", AccessDenied: errors.Is(err, fs.ErrPermission)}, nil
 		}
 		if name == "pixi.lock" {
 			data, err := readHostMetadata(ctx, root, name, 1<<20)
 			if err != nil || validatePixiLock(data) != nil {
-				return p, &Issue{Capability: "project-association", Path: filepath.Join(abs, name), Message: "Pixi lock could not be parsed; lock presence is unknown"}, ctx.Err()
+				return p, &Issue{Capability: "project-association", Path: filepath.Join(abs, name), Message: "Pixi lock could not be parsed; lock presence is unknown", AccessDenied: errors.Is(err, fs.ErrPermission)}, ctx.Err()
 			}
 		}
 		p.LockPath = filepath.Join(abs, name)

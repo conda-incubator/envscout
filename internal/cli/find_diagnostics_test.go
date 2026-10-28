@@ -107,7 +107,7 @@ func TestFindVerboseDoesNotHideInputOrRootFailures(t *testing.T) {
 	if ExitCode(err) != 2 {
 		t.Fatalf("invalid input must still exit 2: %v", err)
 	}
-	for _, command := range []string{"scan", "lint"} {
+	for _, command := range []string{"scan"} {
 		stdout, _, err := runCLI(t, context.Background(), command, "--verbose", t.TempDir())
 		if ExitCode(err) != 2 || stdout != "" {
 			t.Fatalf("--verbose must not be silently ignored by %s: %v, %q", command, err, stdout)

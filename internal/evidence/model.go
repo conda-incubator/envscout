@@ -4,6 +4,7 @@ package evidence
 import (
 	"time"
 
+	"github.com/conda-incubator/envscout/internal/discovery"
 	"github.com/conda-incubator/envscout/internal/imageinput"
 	"github.com/conda-incubator/envscout/internal/inventory"
 	gorattler "github.com/conda-incubator/go-rattler"
@@ -16,9 +17,10 @@ const (
 )
 
 type Issue struct {
-	Capability string `json:"capability"`
-	Path       string `json:"path"`
-	Message    string `json:"message"`
+	Capability   string `json:"capability"`
+	Path         string `json:"path"`
+	Message      string `json:"message"`
+	AccessDenied bool   `json:"access_denied,omitempty"`
 }
 
 // Artifact describes observed content. Bytes are logical payload bytes, not savings.
@@ -34,6 +36,7 @@ type Artifact struct {
 }
 
 type Prefix struct {
+	Kind     string `json:"kind,omitempty"`
 	Path     string `json:"path"`
 	Revision *int   `json:"revision"`
 	Tooling  bool   `json:"tooling"`
@@ -95,16 +98,40 @@ type Target struct {
 }
 
 type Snapshot struct {
-	Started time.Time `json:"started_at"`
-	Targets []Target  `json:"targets"`
-	Issues  []Issue   `json:"issues"`
+	Started    time.Time          `json:"started_at"`
+	Targets    []Target           `json:"targets"`
+	Issues     []Issue            `json:"issues"`
+	Inspection *InspectionSummary `json:"inspection,omitempty"`
+}
+
+// InspectionSummary counts local collection results, independently of rule findings.
+// AccessErrors counts permission-denied errors, not malformed or linked evidence.
+type InspectionSummary struct {
+	Found           int `json:"found"`
+	Inspected       int `json:"inspected"`
+	Failed          int `json:"failed"`
+	AccessErrors    int `json:"access_errors"`
+	DiscoveryIssues int `json:"discovery_issues"`
 }
 
 // Request chooses collectors before I/O. All filesystem reads must remain bounded.
 type Request struct {
-	Capabilities  []string
-	RuntimePrefix string
-	Project       string
+	Capabilities           []string
+	VirtualenvCapabilities []string
+	RuntimePrefix          string
+	Project                string
+}
+
+// ForEnvironment selects only the evidence supported for this environment kind.
+func (r Request) ForEnvironment(kind string) Request {
+	if kind == discovery.KindVenv {
+		r.Capabilities = r.VirtualenvCapabilities
+	}
+	return r
+}
+
+func (t Target) IsVirtualenv() bool {
+	return t.Kind == "dir" && len(t.Prefixes) == 1 && t.Prefixes[0].Kind == discovery.KindVenv
 }
 
 func Requested(r Request, capability string) bool {

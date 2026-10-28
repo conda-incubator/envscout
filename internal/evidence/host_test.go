@@ -133,6 +133,9 @@ func TestHostCancellationPreservesPartialFindings(t *testing.T) {
 			sawPartial = true
 		}
 		if sawPartial {
+			if summary := snapshot.Inspection; summary == nil || summary.Inspected != 0 || summary.Failed != 0 || summary.Found == 0 {
+				t.Fatalf("canceled attempts must remain unfinished: %+v", summary)
+			}
 			return
 		}
 	}

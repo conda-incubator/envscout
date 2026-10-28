@@ -150,12 +150,13 @@ var registry = []Rule{
 		Defaults:   profileDefaults(localOnly, nil, nil), Check: checkRequestedSpecs,
 	},
 	{
-		ID: "ENV013", Version: "1", Name: "CA packages below eMudhra remediation minimum", Category: "security-maintenance",
+		ID: "ENV013", Version: "2", Name: "CA packages below eMudhra remediation minimum", Category: "security-maintenance",
 		Description: "Applications using an environment's CA packages need the distribution's recommended updates following the October 2026 eMudhra intermediate-certificate compromise.",
 		TargetKinds: []string{"dir", "oci-archive"}, Capabilities: []string{"prefixes", "conda-records"}, Available: true,
-		Confidence: "high", Fix: "Update certifi to >=2026.10.19 and ca-certificates to >=2026.10.19 on conda-forge or >=2026.10.20 on Anaconda main, in each affected prefix; update image builds and project locks as appropriate. Keep certificate verification enabled.",
+		VirtualenvCapabilities: []string{"prefixes", "python-distributions"},
+		Confidence:             "high", Fix: "In virtualenvs, update certifi to >=2026.10.18 with the environment's package manager. In conda prefixes, update certifi to >=2026.10.19 and ca-certificates to >=2026.10.19 on conda-forge or >=2026.10.20 on Anaconda main; update image builds and project locks as appropriate. Keep certificate verification enabled.",
 		References: []string{"https://conda.org/blog/2026-10-21-emudhra-security-updates/", "https://github.com/conda-forge/conda-forge.github.io/issues/2967", "https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2"},
-		Exceptions: []string{"Minimums were verified on 2026-10-26 for the official conda-forge and Anaconda main channels; custom or missing channel identities are unknown.", "certifi 2026.10.18 already fixes the incident but falls below the distributions' recommended minimum; older metadata is not proof that an affected certificate remains or is trusted.", "Only conda package metadata is checked, not pip distributions, vendored copies, PEM contents, custom CA files or the operating system trust store.", "Python/package pins or retired platforms may prevent updates; use a supported environment or distribution rather than disabling TLS verification."},
+		Exceptions: []string{"Minimums were verified on 2026-10-26 for the official conda-forge and Anaconda main channels; custom or missing channel identities are unknown.", "certifi 2026.10.18 already fixes the incident but falls below the conda distributions' recommended minimum; it meets the upstream virtualenv minimum. Older metadata is not proof that an affected certificate remains or is trusted.", "Only conda package metadata and local virtualenv certifi distribution metadata are checked, not inherited system packages, pip-vendored copies, PEM contents, custom CA files or the operating system trust store.", "Python/package pins or retired platforms may prevent updates; use a supported environment or distribution rather than disabling TLS verification."},
 		Defaults:   profileDefaults(profiles, allWarning, nil), Check: checkCAPackages,
 	},
 	{
@@ -258,6 +259,7 @@ func ListRules() []Rule {
 func cloneRule(rule Rule) Rule {
 	rule.TargetKinds = slices.Clone(rule.TargetKinds)
 	rule.Capabilities = slices.Clone(rule.Capabilities)
+	rule.VirtualenvCapabilities = slices.Clone(rule.VirtualenvCapabilities)
 	rule.References = slices.Clone(rule.References)
 	rule.Exceptions = slices.Clone(rule.Exceptions)
 	defaults := make(map[string]RuleDefault, len(rule.Defaults))

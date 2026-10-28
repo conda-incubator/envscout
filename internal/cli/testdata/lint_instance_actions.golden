@@ -1,4 +1,4 @@
-Lint | profile local | ruleset 5
+Lint | profile local | ruleset 6
 Target: file:///golden/env (1 prefixes)
 ENV010 warning file:///golden/env
   Found: Installed numpy in `/golden/env` differs from `/golden/project/pixi.lock` (environment science, subdir linux-64). Installed conda package metadata differs from the Pixi lock selection used for this prefix.

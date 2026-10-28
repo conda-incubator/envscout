@@ -40,7 +40,7 @@ func New() *cobra.Command {
 	flags.Var(newEnumValue(&opts.format, "text", "json"), "format", "output format: text or json")
 	flags.StringVar(&opts.platform, "platform", "", "required for oci-archive: OS/ARCH[/VARIANT]")
 	flags.BoolVar(&opts.noColor, "no-color", false, "disable colored output")
-	flags.BoolVar(&opts.verbose, "verbose", false, "show individual discovery warnings (find only)")
+	flags.BoolVar(&opts.verbose, "verbose", false, "show individual discovery and inspection diagnostics (find and lint)")
 	flags.StringVar(&opts.outputDir, "output-dir", opts.outputDir, "directory for SBOM output (scan only)")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return inputError(err) })
 	// Only scan writes SBOMs, so an explicit --output-dir elsewhere would be silently ignored.
@@ -48,8 +48,8 @@ func New() *cobra.Command {
 		if cmd.Name() != "scan" && cmd.Flags().Changed("output-dir") {
 			return inputError(fmt.Errorf("--output-dir is only valid for scan"))
 		}
-		if cmd.Name() != "find" && cmd.Flags().Changed("verbose") {
-			return inputError(fmt.Errorf("--verbose is only valid for find"))
+		if cmd.Name() != "find" && cmd.Name() != "lint" && cmd.Flags().Changed("verbose") {
+			return inputError(fmt.Errorf("--verbose is only valid for find and lint"))
 		}
 		return nil
 	}

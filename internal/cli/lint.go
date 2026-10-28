@@ -110,13 +110,13 @@ func runLint(cmd *cobra.Command, opts *commandOptions, flags *lintFlags, inputs 
 
 	ctx, cancel := operationContext(cmd.Context())
 	defer cancel()
-	progressCtx, stopProgress := startDiscoveryProgress(ctx, cmd.ErrOrStderr(), opts.source == "dir" && opts.format == "text")
+	progressCtx, stopProgress := startLintProgress(ctx, cmd.ErrOrStderr(), opts.source == "dir" && opts.format == "text")
 	snapshot, collectErr := evidence.Collect(progressCtx, opts.source, inputs, opts.platform, req)
 	if err := stopProgress(); err != nil {
 		return errors.Join(lintOutput(err), collectErr, ctx.Err())
 	}
 	report := policy.Evaluate(snapshot, effective, time.Now().UTC())
-	if err := lintOutput(renderLint(cmd.OutOrStdout(), report, opts.format, opts.noColor)); err != nil {
+	if err := lintOutput(renderLint(cmd.OutOrStdout(), report, opts.format, opts.noColor, opts.verbose)); err != nil {
 		return err
 	}
 	if errors.Is(collectErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
@@ -159,7 +159,7 @@ func renderRules(out io.Writer, format string) error {
 	return printer.Err()
 }
 
-func renderLint(out io.Writer, report policy.Report, format string, noColor bool) error {
+func renderLint(out io.Writer, report policy.Report, format string, noColor bool, verbose bool) error {
 	if format == "json" {
 		return encodeJSON(out, report)
 	}
@@ -168,9 +168,11 @@ func renderLint(out io.Writer, report policy.Report, format string, noColor bool
 	imageTargets := make(map[string]bool, len(report.Targets))
 	for _, target := range report.Targets {
 		imageTargets[target.ID] = target.Kind == "oci-archive"
-		printer.Printf("Target: %s (%d prefixes)\n", lintText(target.ID), target.PrefixCount)
-		for _, root := range target.Roots {
-			printer.Printf("  Scope root: %s\n", lintText(root))
+		if verbose {
+			printer.Printf("Target: %s (%d prefixes)\n", lintText(target.ID), target.PrefixCount)
+			for _, root := range target.Roots {
+				printer.Printf("  Scope root: %s\n", lintText(root))
+			}
 		}
 	}
 	findings, suppressed := 0, 0
@@ -196,17 +198,31 @@ func renderLint(out io.Writer, report policy.Report, format string, noColor bool
 		}
 		printer.Printf("  Next: %s\n", lintText(next))
 	}
-	renderOutcomes(printer, report)
+	if verbose {
+		renderOutcomes(printer, report)
+	}
 	printer.Printf("Summary: %s; %d targets; %d findings; %d unknown", lintText(report.Status), len(report.Targets), findings, report.OutcomeCounts[policy.Unknown])
 	if suppressed > 0 {
 		printer.Printf("; %d suppressed", suppressed)
 	}
 	printer.Println()
-	for _, issue := range report.Issues {
-		printer.Printf("Inspection issue: %s: %s\n", lintText(issue.Path), lintText(issue.Message))
+	if summary := report.Inspection; summary != nil {
+		printer.Printf("Inspection: %d environments found; %d inspected; %d failed; %d access errors; %d discovery issues", summary.Found, summary.Inspected, summary.Failed, summary.AccessErrors, summary.DiscoveryIssues)
+		if pending := summary.Found - summary.Inspected - summary.Failed; pending > 0 {
+			printer.Printf("; %d unfinished", pending)
+		}
+		printer.Println()
 	}
-	for _, note := range report.SuppressionNotes {
-		printer.Printf("Suppression: %s %s: %s\n", lintText(note.Rule), lintText(note.Status), lintText(note.Reason))
+	if !verbose && (len(report.Issues) != 0 || report.OutcomeCounts[policy.Unknown] != 0 || len(report.SuppressionNotes) != 0) {
+		printer.Printf("Inspection diagnostics: %d issues; use --verbose to see details\n", len(report.Issues))
+	}
+	if verbose {
+		for _, issue := range report.Issues {
+			printer.Printf("Inspection issue: %s: %s\n", lintText(issue.Path), lintText(issue.Message))
+		}
+		for _, note := range report.SuppressionNotes {
+			printer.Printf("Suppression: %s %s: %s\n", lintText(note.Rule), lintText(note.Status), lintText(note.Reason))
+		}
 	}
 	return printer.Err()
 }

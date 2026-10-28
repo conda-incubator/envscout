@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/conda-incubator/envscout/internal/discovery"
+	"github.com/conda-incubator/envscout/internal/evidence"
 	"github.com/conda-incubator/envscout/internal/inventory"
 	"golang.org/x/term"
 )
@@ -68,6 +69,36 @@ func startScanProgress(ctx context.Context, out io.Writer, enabled bool) (contex
 		now:        time.Now,
 	})
 	return ctx, closeFn
+}
+
+func startLintProgress(ctx context.Context, out io.Writer, enabled bool) (context.Context, func() error) {
+	if !progressEnabled(ctx, out, enabled) {
+		return ctx, func() error { return nil }
+	}
+	ticker := time.NewTicker(progressInterval)
+	ctx, _, _, closeFn := startLintProgressCore(ctx, out, scanCoreConfig{width: terminalWidth(out), enabled: true, tick: ticker.C, stopTicker: ticker.Stop})
+	return ctx, closeFn
+}
+
+func startLintProgressCore(ctx context.Context, out io.Writer, cfg scanCoreConfig) (context.Context, *discovery.Progress, *evidence.Progress, func() error) {
+	if !cfg.enabled || ctx.Err() != nil {
+		if cfg.stopTicker != nil {
+			cfg.stopTicker()
+		}
+		return ctx, nil, nil, func() error { return nil }
+	}
+	discoveryCounts := &discovery.Progress{}
+	inspectionCounts := &evidence.Progress{}
+	ctx = discovery.WithProgress(ctx, discoveryCounts)
+	ctx = evidence.WithProgress(ctx, inspectionCounts)
+	line := func(ticks int) string {
+		if !inspectionCounts.Started.Load() {
+			return fmt.Sprintf("Folders scanned: %d | Environments found: %d", discoveryCounts.Folders.Load(), discoveryCounts.Environments.Load())
+		}
+		finished, failed := inspectionCounts.Finished.Load(), inspectionCounts.Failed.Load()
+		return fmt.Sprintf("%s Linting environments: %d/%d finished | %d inspected | %d failed | %d active", spinnerFrames[(ticks-1)%len(spinnerFrames)], finished, inspectionCounts.Total.Load(), finished-min(finished, failed), failed, inspectionCounts.Active.Load())
+	}
+	return ctx, discoveryCounts, inspectionCounts, runProgressLoop(ctx, out, cfg.width, cfg.tick, cfg.stopTicker, line)
 }
 
 // progressEnabled is the shared gate: enabled by the caller, not canceled, an

@@ -1,6 +1,8 @@
 package discovery
 
 import (
+	"errors"
+	"io/fs"
 	"sort"
 	"sync"
 )
@@ -22,8 +24,13 @@ type Environment struct {
 
 // Issue describes evidence we could not inspect; results may therefore be incomplete.
 type Issue struct {
-	Path  string `json:"path"`
-	Error string `json:"error"`
+	Path         string `json:"path"`
+	Error        string `json:"error"`
+	AccessDenied bool   `json:"access_denied,omitempty"`
+}
+
+func issueFromError(path string, err error) Issue {
+	return Issue{Path: path, Error: err.Error(), AccessDenied: errors.Is(err, fs.ErrPermission)}
 }
 
 // HintSummary counts locations inspected and skipped for one known-location source.
@@ -98,7 +105,11 @@ func (c *collector) addEnvironment(env Environment) {
 }
 
 func (c *collector) addIssue(path string, err error) {
+	c.addRecordedIssue(issueFromError(path, err))
+}
+
+func (c *collector) addRecordedIssue(issue Issue) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.report.Issues = append(c.report.Issues, Issue{Path: path, Error: err.Error()})
+	c.report.Issues = append(c.report.Issues, issue)
 }

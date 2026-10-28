@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -134,7 +133,7 @@ func walkRoot(ctx context.Context, root string, col *collector, readHistory bool
 		prefix := filepath.Dir(path)
 		env, valid, issues := inspectPrefix(ctx, rootDir, root, prefix, readHistory)
 		for _, issue := range issues {
-			col.addIssue(issue.Path, errors.New(issue.Error))
+			col.addRecordedIssue(issue)
 		}
 		if valid {
 			col.addEnvironment(env)
@@ -175,7 +174,7 @@ func isPackageCache(parent, pkgs string) bool {
 func inspectMarkerPrefix(ctx context.Context, rootDir *os.Root, root, prefix string, readHistory bool, col *collector) error {
 	env, valid, issues := inspectPrefix(ctx, rootDir, root, prefix, readHistory)
 	for _, issue := range issues {
-		col.addIssue(issue.Path, errors.New(issue.Error))
+		col.addRecordedIssue(issue)
 	}
 	if valid {
 		col.addEnvironment(env)
@@ -188,11 +187,11 @@ func inspectMarkerPrefix(ctx context.Context, rootDir *os.Root, root, prefix str
 func inspectPrefix(ctx context.Context, rootDir *os.Root, root, prefix string, readHistory bool) (Environment, bool, []Issue) {
 	rel, err := filepath.Rel(root, prefix)
 	if err != nil {
-		return Environment{}, false, []Issue{{Path: prefix, Error: err.Error()}}
+		return Environment{}, false, []Issue{issueFromError(prefix, err)}
 	}
 	scope, err := rootDir.OpenRoot(rel)
 	if err != nil {
-		return Environment{}, false, []Issue{{Path: prefix, Error: err.Error()}}
+		return Environment{}, false, []Issue{issueFromError(prefix, err)}
 	}
 	defer func() { _ = scope.Close() }()
 	return inspectScopedPrefix(ctx, scope, prefix, readHistory)
