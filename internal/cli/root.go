@@ -74,12 +74,12 @@ func validateImageArgs(source, platform string, inputs []string) error {
 	return nil
 }
 
-// findCommand lists conda environments. Without roots it inspects known
+// findCommand lists conda and virtualenv environments. Without roots it inspects known
 // locations (not a full filesystem scan); with an OCI archive it reads the image.
 func findCommand(opts *commandOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "find [ROOT...]",
-		Short: "Find conda environments in local directories or an OCI image archive",
+		Short: "Find conda environments and local virtualenvs, or conda prefixes in an OCI image archive",
 		RunE: func(cmd *cobra.Command, roots []string) error {
 			if err := validateImageArgs(opts.source, opts.platform, roots); err != nil {
 				return err
@@ -145,16 +145,20 @@ func renderFindText(cmd *cobra.Command, opts *commandOptions, report discovery.R
 		out.Println("Known locations only (not a full filesystem scan)")
 	}
 	if len(report.Environments) == 0 {
-		out.Println("No installed conda environments found.")
+		out.Println("No installed environments found.")
 	}
 	if err := out.Err(); err != nil {
 		return err
 	}
 	rows := make([][]string, 0, len(report.Environments))
 	for _, env := range report.Environments {
-		rows = append(rows, []string{lintText(env.Name), revisionCell(env.Revision, cmd.OutOrStdout(), opts.noColor), lintText(env.Path)})
+		revision := revisionCell(env.Revision, cmd.OutOrStdout(), opts.noColor)
+		if env.Kind == discovery.KindVenv {
+			revision = "-"
+		}
+		rows = append(rows, []string{lintText(env.Name), lintText(env.Kind), revision, lintText(env.Path)})
 	}
-	return printRows(cmd.OutOrStdout(), []string{"NAME", "REV", "LOCATION"}, rows)
+	return printRows(cmd.OutOrStdout(), []string{"NAME", "TYPE", "REV", "LOCATION"}, rows)
 }
 
 // printRows writes an aligned table with a header row, two spaces between columns.

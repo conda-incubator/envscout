@@ -10,11 +10,56 @@ import (
 	"path/filepath"
 )
 
-// inspectScopedPrefix confirms a prefix from its conda-meta directory. The scope root is
-// the prefix itself; all reads go through it. A prefix is a candidate when conda-meta is
-// a real directory holding at least one regular .json entry. Record contents are not
-// decoded here; that validation belongs to inventory/lint.
+// pyvenvMarker is the identity file a virtualenv writes at its root. Its contents are not
+// parsed: a regular file of this name is the whole signal.
+const pyvenvMarker = "pyvenv.cfg"
+
+// inspectScopedPrefix is the single decision point for a prefix's kind. Conda is
+// authoritative when conda-meta is a real directory, even if its records are invalid.
+// Otherwise a virtualenv is identified through a regular,
+// non-link pyvenv.cfg. The scope root is the prefix itself; all reads go through it.
 func inspectScopedPrefix(ctx context.Context, scope *os.Root, prefix string, readHistory bool) (Environment, bool, []Issue) {
+	meta, err := scope.Lstat("conda-meta")
+	if err == nil && meta.IsDir() {
+		return inspectCondaPrefix(ctx, scope, prefix, readHistory)
+	}
+	// Absent, file, or symlink conda-meta is not a conda marker. A valid venv wins; with no
+	// valid venv, the existing conda issue is kept so the invalid entry stays visible.
+	env, valid, issues := inspectVenv(scope, prefix)
+	if valid {
+		return env, true, nil
+	}
+	if err == nil {
+		return inspectCondaPrefix(ctx, scope, prefix, readHistory)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return env, false, issues
+	}
+	return Environment{}, false, append(issues, Issue{Path: filepath.Join(prefix, "conda-meta"), Error: err.Error()})
+}
+
+// inspectVenv confirms a venv from a regular pyvenv.cfg. Absence is silent; a symlink or
+// other non-regular entry is an issue. The interpreter and installed packages are not
+// examined, so a missing bin/python never invalidates the marker.
+func inspectVenv(scope *os.Root, prefix string) (Environment, bool, []Issue) {
+	markerPath := filepath.Join(prefix, pyvenvMarker)
+	info, err := scope.Lstat(pyvenvMarker)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Environment{}, false, nil
+	}
+	if err != nil {
+		return Environment{}, false, []Issue{{Path: markerPath, Error: err.Error()}}
+	}
+	if !info.Mode().IsRegular() {
+		return Environment{}, false, []Issue{{Path: markerPath, Error: "pyvenv.cfg is not a regular file; links are not followed"}}
+	}
+	return Environment{Name: filepath.Base(prefix), Path: prefix, Kind: KindVenv}, true, nil
+}
+
+// inspectCondaPrefix confirms a prefix from its conda-meta directory. A prefix is a
+// candidate when conda-meta is a real directory holding at least one regular .json entry.
+// Record contents are not decoded here; that validation belongs to inventory/lint.
+func inspectCondaPrefix(ctx context.Context, scope *os.Root, prefix string, readHistory bool) (Environment, bool, []Issue) {
 	var issues []Issue
 	metaPath := filepath.Join(prefix, "conda-meta")
 	meta, err := scope.Lstat("conda-meta")
@@ -40,7 +85,7 @@ func inspectScopedPrefix(ctx context.Context, scope *os.Root, prefix string, rea
 	if !hasRecord {
 		return Environment{}, false, issues
 	}
-	env := Environment{Name: filepath.Base(prefix), Path: prefix}
+	env := Environment{Name: filepath.Base(prefix), Path: prefix, Kind: KindConda}
 	if !readHistory {
 		return env, true, issues
 	}

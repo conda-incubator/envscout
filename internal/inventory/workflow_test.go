@@ -25,12 +25,12 @@ func writeCondaPrefix(t *testing.T, prefix string) {
 	}
 }
 
-func TestScanCondaHostTree(t *testing.T) {
+func TestScanHostTree(t *testing.T) {
 	root := t.TempDir()
 	prefix := filepath.Join(root, "envs", "sample")
 	writeCondaPrefix(t, prefix)
 	outputDir := filepath.Join(t.TempDir(), "sboms")
-	report, err := ScanConda(context.Background(), []string{root}, outputDir)
+	report, err := Scan(context.Background(), []string{root}, outputDir)
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -61,10 +61,10 @@ func TestScanCondaHostTree(t *testing.T) {
 	}
 }
 
-func TestScanCondaEmptyTreeWritesNothing(t *testing.T) {
+func TestScanEmptyTreeWritesNothing(t *testing.T) {
 	root := t.TempDir()
 	outputDir := filepath.Join(t.TempDir(), "sboms")
-	report, err := ScanConda(context.Background(), []string{root}, outputDir)
+	report, err := Scan(context.Background(), []string{root}, outputDir)
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -76,11 +76,11 @@ func TestScanCondaEmptyTreeWritesNothing(t *testing.T) {
 	}
 }
 
-func TestScanCondaRefusesOverwrite(t *testing.T) {
+func TestScanRefusesOverwrite(t *testing.T) {
 	root := t.TempDir()
 	writeCondaPrefix(t, filepath.Join(root, "envs", "sample"))
 	outputDir := t.TempDir()
-	first, err := ScanConda(context.Background(), []string{root}, outputDir)
+	first, err := Scan(context.Background(), []string{root}, outputDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestScanCondaRefusesOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := ScanConda(context.Background(), []string{root}, outputDir)
+	second, err := Scan(context.Background(), []string{root}, outputDir)
 	if err == nil || !strings.Contains(err.Error(), "scan incomplete: 1 failed target(s), 0 discovery issue(s)") {
 		t.Fatalf("repeat scan must return incomplete error: %v", err)
 	}
@@ -101,15 +101,15 @@ func TestScanCondaRefusesOverwrite(t *testing.T) {
 	}
 }
 
-func TestScanCondaBadRootReturnsDiscoveryError(t *testing.T) {
+func TestScanBadRootReturnsDiscoveryError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
-	report, err := ScanConda(context.Background(), []string{missing}, t.TempDir())
+	report, err := Scan(context.Background(), []string{missing}, t.TempDir())
 	if err == nil || report.Error != err.Error() {
 		t.Fatalf("bad root must return and record the discovery error: %v / %+v", err, report)
 	}
 }
 
-func TestScanCondaPartialDiscoveryStillScans(t *testing.T) {
+func TestScanPartialDiscoveryStillScans(t *testing.T) {
 	root := t.TempDir()
 	writeCondaPrefix(t, filepath.Join(root, "envs", "good"))
 	// A conda-meta record with no name is a discovery issue (incomplete evidence).
@@ -121,7 +121,7 @@ func TestScanCondaPartialDiscoveryStillScans(t *testing.T) {
 		t.Fatal(err)
 	}
 	outputDir := t.TempDir()
-	report, err := ScanConda(context.Background(), []string{root}, outputDir)
+	report, err := Scan(context.Background(), []string{root}, outputDir)
 	// Discovery only proves candidates; the malformed prefix fails conda validation
 	// during scanning and is counted as a failed target, while the good prefix stays.
 	if err == nil || !strings.Contains(err.Error(), "scan incomplete: 1 failed target(s)") {
@@ -145,14 +145,14 @@ func TestScanCondaPartialDiscoveryStillScans(t *testing.T) {
 	}
 }
 
-func TestScanCondaContextCancellation(t *testing.T) {
+func TestScanContextCancellation(t *testing.T) {
 	root := t.TempDir()
 	writeCondaPrefix(t, filepath.Join(root, "envs", "a"))
 	writeCondaPrefix(t, filepath.Join(root, "envs", "b"))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	outputDir := t.TempDir()
-	report, err := ScanConda(ctx, []string{root}, outputDir)
+	report, err := Scan(ctx, []string{root}, outputDir)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v; want wrapped context.Canceled", err)
 	}
@@ -272,11 +272,11 @@ func (c *cancelWhenFileExists) Err() error {
 	return c.Context.Err()
 }
 
-func TestScanCondaRelativeOutputResolved(t *testing.T) {
+func TestScanRelativeOutputResolved(t *testing.T) {
 	root := t.TempDir()
 	writeCondaPrefix(t, filepath.Join(root, "envs", "sample"))
 	t.Chdir(t.TempDir())
-	report, err := ScanConda(context.Background(), []string{root}, "sboms")
+	report, err := Scan(context.Background(), []string{root}, "sboms")
 	if err != nil {
 		t.Fatalf("relative output must be accepted: %v", err)
 	}
@@ -292,17 +292,17 @@ func TestScanCondaRelativeOutputResolved(t *testing.T) {
 	}
 }
 
-// TestScanCondaCancellationDuringTargetRemovesPartialOutput cancels with a custom
+// TestScanCancellationDuringTargetRemovesPartialOutput cancels with a custom
 // cause while a target is being written. The in-flight observation must report an
 // error with a zero Result, no partial SBOM may remain, and the error must keep both
 // the cause and context.Canceled identity.
-func TestScanCondaCancellationDuringTargetRemovesPartialOutput(t *testing.T) {
+func TestScanCancellationDuringTargetRemovesPartialOutput(t *testing.T) {
 	root := t.TempDir()
 	writeCondaPrefix(t, filepath.Join(root, "envs", "a"))
 	cause := errors.New("operator stop")
 	outputDir := t.TempDir()
 	ctx := newCancelWhenFileExists(outputDir, cause)
-	report, err := ScanConda(ctx, []string{root}, outputDir)
+	report, err := Scan(ctx, []string{root}, outputDir)
 	if !errors.Is(err, cause) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v; want custom cause and context.Canceled", err)
 	}
@@ -326,9 +326,9 @@ func TestScanCondaCancellationDuringTargetRemovesPartialOutput(t *testing.T) {
 	}
 }
 
-// TestScanCondaCompletedTargetSurvivesSubsequentStop keeps a target that completed
+// TestScanCompletedTargetSurvivesSubsequentStop keeps a target that completed
 // before a later cancellation: its observation has no error and its SBOM remains.
-func TestScanCondaCompletedTargetSurvivesSubsequentStop(t *testing.T) {
+func TestScanCompletedTargetSurvivesSubsequentStop(t *testing.T) {
 	root := t.TempDir()
 	writeCondaPrefix(t, filepath.Join(root, "envs", "a"))
 	writeCondaPrefix(t, filepath.Join(root, "envs", "b"))
@@ -337,7 +337,7 @@ func TestScanCondaCompletedTargetSurvivesSubsequentStop(t *testing.T) {
 	defer cancel(nil)
 	// Cancel when the second target is reserved, after the first write has returned.
 	watcher := &stopAfterFirstSBOM{Context: ctx, dir: outputDir, cancel: cancel, cause: errors.New("operator stop")}
-	report, err := ScanConda(watcher, []string{root}, outputDir)
+	report, err := Scan(watcher, []string{root}, outputDir)
 	if err == nil {
 		t.Fatal("stopped scan must return an error")
 	}
@@ -372,12 +372,12 @@ func (s *stopAfterFirstSBOM) Err() error {
 	return s.Context.Err()
 }
 
-func TestScanCondaNoArtifactsOnPreflightError(t *testing.T) {
-	if _, err := ScanConda(context.Background(), []string{t.TempDir()}, ""); err == nil {
+func TestScanNoArtifactsOnPreflightError(t *testing.T) {
+	if _, err := Scan(context.Background(), []string{t.TempDir()}, ""); err == nil {
 		t.Fatal("empty scan output directory must be rejected")
 	}
 	outputDir := filepath.Join(t.TempDir(), "sboms")
-	if _, err := ScanConda(context.Background(), []string{filepath.Join(t.TempDir(), "missing")}, outputDir); err == nil {
+	if _, err := Scan(context.Background(), []string{filepath.Join(t.TempDir(), "missing")}, outputDir); err == nil {
 		t.Fatal("expected discovery error for bad root")
 	}
 	if _, err := os.Stat(outputDir); !os.IsNotExist(err) {

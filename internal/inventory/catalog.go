@@ -22,11 +22,21 @@ import (
 // owned by the caller) must not. The conda-meta cataloger is added explicitly because Syft
 // v1.54 tags it for directories only. Remote lookups and host caches are disabled.
 func Catalog(ctx context.Context, src source.Source) (*sbom.SBOM, error) {
+	return catalog(ctx, src, true)
+}
+
+// catalog runs Catalog with the conda-meta cataloger included only when withConda is set.
+// Virtualenvs pass false so conda-meta records inside them are never counted as packages.
+func catalog(ctx context.Context, src source.Source, withConda bool) (*sbom.SBOM, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	cataloger := &validatedCondaCataloger{Cataloger: conda.NewCondaMetaCataloger()}
-	cfg := offlineConfig().WithCatalogers(pkgcataloging.NewAlwaysEnabledCatalogerReference(cataloger))
+	cfg := offlineConfig()
+	cataloger := &validatedCondaCataloger{}
+	if withConda {
+		cataloger.Cataloger = conda.NewCondaMetaCataloger()
+		cfg = cfg.WithCatalogers(pkgcataloging.NewAlwaysEnabledCatalogerReference(cataloger))
+	}
 	bom, err := syft.CreateSBOM(ctx, src, cfg)
 	err = errors.Join(err, ctx.Err())
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/conda-incubator/envscout/internal/discovery"
 	"github.com/conda-incubator/envscout/internal/inventory"
 	"github.com/spf13/cobra"
 )
@@ -33,7 +34,7 @@ func scanCommand(opts *commandOptions) *cobra.Command {
 				return errors.Join(renderImage(cmd, opts, report, true), err)
 			}
 			ctx, stopProgress := startDiscoveryProgress(cmd.Context(), cmd.ErrOrStderr(), opts.format == "text")
-			report, err := inventory.ScanConda(ctx, inputs, opts.outputDir)
+			report, err := inventory.Scan(ctx, inputs, opts.outputDir)
 			err = errors.Join(err, stopProgress())
 			// A text report with nothing recorded would be misleading; the error alone is the answer.
 			if err != nil && opts.format == "text" && len(report.Discovery.Environments) == 0 && len(report.Discovery.Issues) == 0 && len(report.Observations) == 0 {
@@ -45,7 +46,7 @@ func scanCommand(opts *commandOptions) *cobra.Command {
 }
 
 // renderScan writes the directory scan. It returns only rendering errors; the
-// caller joins the domain error that ScanConda returned.
+// caller joins the domain error that Scan returned.
 func renderScan(cmd *cobra.Command, opts *commandOptions, report inventory.ScanReport) error {
 	if opts.format == "json" {
 		if err := encodeJSON(cmd.OutOrStdout(), report); err != nil {
@@ -65,7 +66,12 @@ func renderScanText(cmd *cobra.Command, report inventory.ScanReport) error {
 	failures := 0
 	for _, observation := range report.Observations {
 		env := observation.Environment
-		out.Printf("%s  (revision %s)\n  Prefix: %s\n  Duration: %s\n", lintText(env.Name), formatRevision(env.Revision), lintText(env.Path), observation.Duration.Round(time.Millisecond))
+		if env.Kind == discovery.KindVenv {
+			out.Printf("%s  (venv)\n", lintText(env.Name))
+		} else {
+			out.Printf("%s  (revision %s)\n", lintText(env.Name), formatRevision(env.Revision))
+		}
+		out.Printf("  Prefix: %s\n  Duration: %s\n", lintText(env.Path), observation.Duration.Round(time.Millisecond))
 		if observation.Error != "" {
 			failures++
 			out.Printf("  SBOM: not written (%s)\n\n", lintText(observation.Error))
@@ -83,9 +89,9 @@ func renderScanText(cmd *cobra.Command, report inventory.ScanReport) error {
 		out.Printf("  %s\n", lintText(root))
 	}
 	environments := len(report.Discovery.Environments)
-	out.Printf("Summary: %s; %d conda environments found, %d SBOMs written, %d failed scans, %d discovery issues\n", report.Status, environments, len(report.Observations)-failures, failures, len(report.Discovery.Issues))
+	out.Printf("Summary: %s; %d environments found, %d SBOMs written, %d failed scans, %d discovery issues\n", report.Status, environments, len(report.Observations)-failures, failures, len(report.Discovery.Issues))
 	out.Printf("Timing: discovery %s; total %s\n", report.DiscoveryDuration.Round(time.Millisecond), report.TotalDuration.Round(time.Millisecond))
-	out.Println("Coverage: conda prefixes within requested roots only; package counts are Syft observations, not verified totals.")
+	out.Println("Coverage: environment prefixes within requested roots only; package counts are Syft observations, not verified totals.")
 	return out.Err()
 }
 

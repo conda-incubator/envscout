@@ -34,7 +34,7 @@ func WriteImage(ctx context.Context, img *image.Image, input string, outputDir s
 	if err != nil {
 		return Result{}, err
 	}
-	return write(ctx, ImageSource(img, input), filepath.Join(outputDir, filename))
+	return write(ctx, ImageSource(img, input), filepath.Join(outputDir, filename), true)
 }
 
 func imageFilename(img *image.Image) (string, error) {

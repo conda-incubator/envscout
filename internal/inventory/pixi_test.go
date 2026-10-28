@@ -86,7 +86,7 @@ packages:
 	}
 }
 
-func TestScanCondaIncludesPixiLockSummary(t *testing.T) {
+func TestScanIncludesPixiLockSummary(t *testing.T) {
 	workspace := t.TempDir()
 	prefix := filepath.Join(workspace, ".pixi", "envs", "default")
 	meta := filepath.Join(prefix, "conda-meta")
@@ -132,7 +132,7 @@ packages:
 		t.Fatal(err)
 	}
 	outputDir := t.TempDir()
-	report, err := ScanConda(context.Background(), []string{prefix}, outputDir)
+	report, err := Scan(context.Background(), []string{prefix}, outputDir)
 	if err != nil {
 		t.Fatalf("scan failed: %v", err)
 	}

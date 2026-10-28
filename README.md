@@ -25,6 +25,8 @@ All commands support `--format text|json` and `--no-color`. Only `scan` accepts 
 
 Without roots, `find` checks known installation and configuration locations; it does not search the whole filesystem.
 
+Local `find` and `scan` recognize conda prefixes and virtualenvs with a `pyvenv.cfg` marker, including those created by uv, Poetry, virtualenv or `python -m venv`. Scans cover the selected prefix, not inherited system packages or external editable-install sources; empty virtualenvs are valid. Virtualenv linting is not yet supported and reports incomplete inspection (exit 2). OCI environment discovery remains conda-only.
+
 Explicit-root searches do not follow symlinks or cross filesystem-device boundaries. They skip `.git`, `node_modules`, `__pycache__`, `site-packages`, and conda package caches unless those paths are supplied as roots. Scans run offline and retain successful SBOMs when other environments cannot be inspected.
 
 For OCI archives, specify a platform:
