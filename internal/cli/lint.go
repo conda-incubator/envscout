@@ -25,7 +25,7 @@ type lintFlags struct {
 
 // listConflicts are the flags that --list-rules refuses when explicitly set.
 // --format and --no-color remain valid because they only affect rendering.
-var listConflicts = []string{"source", "platform", "output-dir", "profile", "fail-on", "config", "runtime-prefix", "project", "rule", "disable-rule"}
+var listConflicts = []string{"source", "platform", "output-dir", "exclude", "profile", "fail-on", "config", "runtime-prefix", "project", "rule", "disable-rule"}
 
 func lintCommand(opts *commandOptions) *cobra.Command {
 	flags := &lintFlags{}

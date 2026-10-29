@@ -35,6 +35,10 @@ Local `find` and `scan` recognize conda prefixes and virtualenvs with a `pyvenv.
 
 Explicit-root searches do not follow symlinks or cross filesystem-device boundaries. They skip `.git`, `node_modules`, `__pycache__`, `site-packages`, and conda package caches unless those paths are supplied as roots. Scans run offline and retain successful SBOMs when other environments cannot be inspected.
 
+All three commands accept repeatable folder globs, for example `./envscout lint --rule ENV013 --exclude '.cache' --exclude '**/build' ~/`. Quote patterns; bare names match at any depth, `/` patterns are search-root relative (current directory for no-root `find`, `/` for images), and absolute paths also work. Matches are case-sensitive and skip entire subtrees, including explicit roots.
+
+Exclusions apply only to discovery, not package files inside selected environments or whole-image SBOMs/image-wide lint evidence.
+
 For OCI archives, specify a platform:
 
 ```sh

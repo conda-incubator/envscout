@@ -427,6 +427,7 @@ func expandConfigPath(raw string, inputs knownInputs) (string, error) {
 // children of a container, spends budget; exhaustion stops the probe with one issue.
 type prober struct {
 	ctx       context.Context
+	root      string
 	col       *collector
 	progress  *Progress // nil when instrumentation is disabled
 	seen      map[string]bool
@@ -443,8 +444,8 @@ func (p *prober) examined() {
 
 // probeKnown runs every candidate through one prober and returns the per-source summary.
 // Skipped counts candidates that were not probed (absent, rejected, or after cancellation).
-func probeKnown(ctx context.Context, candidates []candidate, col *collector) []HintSummary {
-	p := &prober{ctx: ctx, col: col, progress: col.progress, seen: map[string]bool{}, budget: maxHintCandidates}
+func probeKnown(ctx context.Context, root string, candidates []candidate, col *collector) []HintSummary {
+	p := &prober{ctx: ctx, root: root, col: col, progress: col.progress, seen: map[string]bool{}, budget: maxHintCandidates}
 	stats := map[string]HintSummary{}
 	for _, c := range candidates {
 		s := stats[c.source]
@@ -488,6 +489,9 @@ func (p *prober) hint(c candidate) bool {
 // isRealDir reports whether path is a real (non-symlink) directory, recording the exact issue
 // otherwise. A missing path is only an issue when configured.
 func (p *prober) isRealDir(path string, configured bool, typeError string) bool {
+	if excluded(p.ctx, p.root, path) {
+		return false
+	}
 	info, err := os.Lstat(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -512,7 +516,7 @@ func (p *prober) isRealDir(path string, configured bool, typeError string) bool 
 
 // prefix inspects one prefix through its own os.Root, charging the shared budget.
 func (p *prober) prefix(path string) {
-	if p.seen[path] || p.ctx.Err() != nil {
+	if p.seen[path] || p.ctx.Err() != nil || excluded(p.ctx, p.root, path) {
 		return
 	}
 	p.seen[path] = true
@@ -606,7 +610,7 @@ func findKnown(ctx context.Context, inputs knownInputs) (Report, error) {
 		col.addIssue("cwd", inputs.cwdErr)
 	}
 	candidates := knownCandidates(inputs, col)
-	report.Hints = probeKnown(ctx, candidates, col)
+	report.Hints = probeKnown(ctx, inputs.cwd, candidates, col)
 	sortReport(&report)
 	return report, ctx.Err()
 }

@@ -42,13 +42,6 @@ func Find(ctx context.Context, roots []string, readHistory bool) (Report, error)
 		if err != nil {
 			return report, fmt.Errorf("root %q: %w", root, err)
 		}
-		info, err := os.Lstat(path)
-		if err != nil {
-			return report, fmt.Errorf("root %q: %w", path, err)
-		}
-		if !info.IsDir() {
-			return report, fmt.Errorf("root %q: must be a directory, not a file or symlink", path)
-		}
 		if !seen[path] {
 			seen[path] = true
 			report.Roots = append(report.Roots, path)
@@ -56,13 +49,30 @@ func Find(ctx context.Context, roots []string, readHistory bool) (Report, error)
 	}
 	sort.Strings(report.Roots)
 
-	col := newCollector(&report)
-	col.progress = progressFrom(ctx)
+	var included []string
 	for _, root := range report.Roots {
 		if err := ctx.Err(); err != nil {
 			break
 		}
-		if err := walkRoot(ctx, root, col, readHistory); err != nil {
+		if excluded(ctx, root, root, report.Roots...) {
+			continue
+		}
+		info, err := os.Lstat(root)
+		if err != nil {
+			return report, fmt.Errorf("root %q: %w", root, err)
+		}
+		if !info.IsDir() {
+			return report, fmt.Errorf("root %q: must be a directory, not a file or symlink", root)
+		}
+		included = append(included, root)
+	}
+	col := newCollector(&report)
+	col.progress = progressFrom(ctx)
+	for _, root := range included {
+		if err := ctx.Err(); err != nil {
+			break
+		}
+		if err := walkRoot(ctx, root, report.Roots, col, readHistory); err != nil {
 			col.addIssue(root, err)
 		}
 	}
@@ -73,7 +83,7 @@ func Find(ctx context.Context, roots []string, readHistory bool) (Report, error)
 // walkRoot walks one explicit root. The root is opened once as an os.Root and every
 // candidate prefix is read through a Root opened for that prefix only, so symlinks
 // pointing outside a prefix cannot be followed and no ancestor is re-resolved per hit.
-func walkRoot(ctx context.Context, root string, col *collector, readHistory bool) error {
+func walkRoot(ctx context.Context, root string, roots []string, col *collector, readHistory bool) error {
 	rootDir, err := os.OpenRoot(root)
 	if err != nil {
 		return err
@@ -91,6 +101,14 @@ func walkRoot(ctx context.Context, root string, col *collector, readHistory bool
 	return fastwalk.Walk(conf, root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		// Prune before recording walk errors or reading environment markers.
+		folder := path
+		if entry != nil && !entry.IsDir() {
+			folder = filepath.Dir(path)
+		}
+		if excluded(ctx, root, folder, roots...) {
+			return fastwalk.SkipDir
 		}
 		if walkErr != nil {
 			col.addIssue(path, walkErr)
@@ -113,6 +131,7 @@ func walkRoot(ctx context.Context, root string, col *collector, readHistory bool
 			if hasDevice {
 				var info fs.FileInfo
 				if device.needsInfo(path) {
+					var err error
 					info, err = entry.Info()
 					if err != nil {
 						col.addIssue(path, err)

@@ -64,8 +64,11 @@ func FindImage(ctx context.Context, img *image.Image, readHistory bool) (report 
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
-		report.MetadataFilesExamined++
 		requested := string(res.RequestPath)
+		if excluded(ctx, "/", path.Dir(requested)) {
+			continue
+		}
+		report.MetadataFilesExamined++
 		if !isRegularImageRecord(img, res) {
 			report.Issues = append(report.Issues, Issue{Path: requested, Error: "record is absent, not a regular file, or reached through a link; links are not followed"})
 			continue
