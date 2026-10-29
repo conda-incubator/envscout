@@ -73,7 +73,7 @@ func renderGoldenWithConfig(t *testing.T, snapshot evidence.Snapshot, config pol
 		}
 	}
 	var out bytes.Buffer
-	if err := renderLint(&out, report, "text", true); err != nil {
+	if err := renderLint(&out, report, "text", true, true); err != nil {
 		t.Fatalf("renderLint: %v", err)
 	}
 	seen := make(map[string]bool, len(report.Findings))
@@ -317,7 +317,7 @@ func TestLintGoldenInstanceActions(t *testing.T) {
 		OutcomeCounts: map[policy.Status]int{policy.FindingStatus: 2},
 	}
 	var out bytes.Buffer
-	if err := renderLint(&out, report, "text", true); err != nil {
+	if err := renderLint(&out, report, "text", true, true); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Next: "+report.Findings[0].Next) || strings.Contains(out.String(), lockRule.Fix) || !strings.Contains(out.String(), "Next: "+projectRule.Fix) {

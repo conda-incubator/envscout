@@ -1,4 +1,4 @@
-Lint | profile container-distroless | ruleset 5
+Lint | profile container-distroless | ruleset 6
 Target: oci-archive:golden-image (2 prefixes)
 IMG003 info oci-archive:golden-image
   Found: Installer prefixes `/opt/conda` coexist with application-prefix candidates `/opt/conda/envs/app`. A separate installer can add build tooling to the application image.

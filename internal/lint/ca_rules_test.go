@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/conda-incubator/envscout/internal/discovery"
 	"github.com/conda-incubator/envscout/internal/evidence"
 )
 
@@ -106,6 +107,13 @@ func TestCAPackageRequirementsAndProfiles(t *testing.T) {
 		if caps := Requirements(policy).Capabilities; !slices.Equal(caps, []string{"conda-records", "prefixes"}) {
 			t.Fatalf("CA rule must use only existing package metadata: %v", caps)
 		}
+		want := []string(nil)
+		if source == "dir" {
+			want = []string{"prefixes", "python-distributions"}
+		}
+		if caps := Requirements(policy).VirtualenvCapabilities; !slices.Equal(caps, want) {
+			t.Fatalf("virtualenv evidence is local-only: %v, want %v", caps, want)
+		}
 		rule, _ := LookupRule("ENV013")
 		if !rule.Defaults[profile].Enabled || rule.Defaults[profile].Severity != Warning {
 			t.Fatalf("CA rule must default to warning for %s", profile)
@@ -202,5 +210,51 @@ func TestCAPackageUpdateActionAndImageScope(t *testing.T) {
 		if !strings.Contains(finding.Next, "image build") || strings.Contains(finding.Next, "--prefix '/env") {
 			t.Errorf("image update must not target a host prefix: %s", finding.Next)
 		}
+	}
+}
+
+func TestVirtualenvCertifiEvidenceBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name, version, path, coverage string
+		status                        Status
+		findings                      int
+	}{
+		{"old", "2026.7.22", "/venv/Lib/site-packages/certifi.dist-info/METADATA", evidence.Complete, FindingStatus, 1},
+		{"fixed", "2026.10.18", "/venv/Lib/site-packages/certifi.dist-info/METADATA", evidence.Complete, Pass, 0},
+		{"prerelease", "2026.10.18rc1", "/venv/Lib/site-packages/certifi.dist-info/METADATA", evidence.Complete, FindingStatus, 1},
+		{"invalid", "invalid", "/venv/Lib/site-packages/certifi.dist-info/METADATA", evidence.Complete, Unknown, 0},
+		{"no path", "2026.7.22", "", evidence.Complete, Unknown, 0},
+		{"outside", "2026.7.22", "/outside/certifi.dist-info/METADATA", evidence.Complete, Unknown, 0},
+		{"partial positive", "2026.7.22", "/venv/Lib/site-packages/certifi.dist-info/METADATA", evidence.Partial, FindingStatus, 1},
+		{"partial fixed", "2026.10.18", "/venv/Lib/site-packages/certifi.dist-info/METADATA", evidence.Partial, Unknown, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			target := evidence.Target{ID: "venv", Kind: "dir", Input: "/venv", Prefixes: []evidence.Prefix{{Kind: discovery.KindVenv, Path: "/venv"}},
+				Python:   []evidence.PythonDistribution{{Name: "certifi", Version: test.version, Path: test.path}},
+				Coverage: map[string]string{"prefixes": evidence.Complete, "python-distributions": test.coverage}}
+			report := evaluateCAPackages(t, target)
+			if caReportStatus(t, report) != test.status || len(report.Findings) != test.findings {
+				t.Fatalf("virtualenv certifi evidence: %+v", report)
+			}
+			if (report.Status == "incomplete") != (test.coverage != evidence.Complete) {
+				t.Fatalf("coverage must not claim completion: %+v", report)
+			}
+		})
+	}
+}
+
+func TestVirtualenvRuleSupportIsExplicit(t *testing.T) {
+	target := evidence.Target{ID: "venv", Kind: "dir", Input: "/venv", Prefixes: []evidence.Prefix{{Kind: discovery.KindVenv, Path: "/venv"}},
+		Python:   []evidence.PythonDistribution{{Name: "certifi", Version: "2026.7.22", Path: "/venv/Lib/site-packages/certifi.dist-info/METADATA"}},
+		Coverage: map[string]string{"prefixes": evidence.Complete, "python-distributions": evidence.Complete}}
+	p := enginePolicy(t, "dir", "local", "ENV003", "ENV013")
+	report := engineEvaluate(target, p)
+	if report.Status != "incomplete" || engineOutcome(t, report, "ENV003").Status != Unknown || engineOutcome(t, report, "ENV013").Status != FindingStatus || len(report.Findings) != 1 || report.Findings[0].RuleID != "ENV013" {
+		t.Fatalf("unsupported conda rules must not classify virtualenv distributions: %+v", report)
+	}
+	rule, _ := LookupRule("ENV013")
+	rule.VirtualenvCapabilities[0] = "mutated"
+	if next, _ := LookupRule("ENV013"); next.VirtualenvCapabilities[0] == "mutated" {
+		t.Fatal("virtualenv requirements must not expose registry mutation")
 	}
 }

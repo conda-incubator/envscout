@@ -203,6 +203,62 @@ func TestStartScanProgressDisabledIsNoop(t *testing.T) {
 	}
 }
 
+func TestLintProgressSwitchesPhaseAndStaysAlive(t *testing.T) {
+	w := newAckWriter()
+	tick := make(chan time.Time)
+	_, discoveryP, inspection, closeFn := startLintProgressCore(context.Background(), w, scanCfg(tick, newFakeClock()))
+	discoveryP.Folders.Store(30)
+	discoveryP.Environments.Store(4)
+	tickAndAwait(t, tick, w)
+	inspection.Total.Store(4)
+	inspection.Started.Store(true)
+	inspection.Finished.Store(2)
+	inspection.Failed.Store(1)
+	inspection.Active.Store(1)
+	tickAndAwait(t, tick, w)
+	tickAndAwait(t, tick, w)
+	// Independent atomic samples can briefly observe a failed attempt first.
+	inspection.Finished.Store(0)
+	inspection.Failed.Store(1)
+	tickAndAwait(t, tick, w)
+	if err := closeFn(); err != nil {
+		t.Fatal(err)
+	}
+	text := w.String()
+	if !strings.Contains(text, "Folders scanned: 30 | Environments found: 4") || !strings.Contains(text, "/ Linting environments: 2/4 finished | 1 inspected | 1 failed | 1 active") || !strings.Contains(text, "- Linting environments: 2/4 finished") || !strings.Contains(text, "0/4 finished | 0 inspected") || strings.Contains(text, "184467") || !strings.HasSuffix(text, progressClear) {
+		t.Fatalf("lint must display both phases, advance the spinner, and clear: %q", text)
+	}
+}
+
+func TestLintProgressDisabledAndCanceled(t *testing.T) {
+	ctx := context.Background()
+	var out bytes.Buffer
+	if got, closeFn := startLintProgress(ctx, &out, true); got != ctx || closeFn() != nil || out.Len() != 0 {
+		t.Fatal("noninteractive lint must not attach counters or emit progress")
+	}
+	got, d, p, closeFn := startLintProgressCore(ctx, &out, scanCoreConfig{stopTicker: noopTicker})
+	if got != ctx || d != nil || p != nil || closeFn() != nil {
+		t.Fatal("disabled lint progress must be a no-op")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	cancel()
+	got, d, p, closeFn = startLintProgressCore(ctx, &out, scanCoreConfig{enabled: true, stopTicker: noopTicker})
+	if got != ctx || d != nil || p != nil || closeFn() != nil || out.Len() != 0 {
+		t.Fatal("pre-canceled lint progress must not start a renderer")
+	}
+}
+
+func TestLintProgressReturnsWriteFailure(t *testing.T) {
+	writeErr := errors.New("terminal gone")
+	w := &failWriter{allowed: 0, err: writeErr}
+	tick := make(chan time.Time)
+	_, _, _, closeFn := startLintProgressCore(context.Background(), w, scanCfg(tick, newFakeClock()))
+	tick <- time.Time{}
+	if err := closeFn(); !errors.Is(err, writeErr) {
+		t.Fatalf("lint progress must preserve write failure: %v", err)
+	}
+}
+
 func TestScanProgressDisabledAttachesNothing(t *testing.T) {
 	ctx := context.Background()
 	gotCtx, d, s, closeFn := startScanProgressCore(ctx, &bytes.Buffer{}, scanCoreConfig{stopTicker: noopTicker})

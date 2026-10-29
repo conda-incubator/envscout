@@ -1,4 +1,4 @@
-Lint | profile local | ruleset 5
+Lint | profile local | ruleset 6
 Target: file:///golden/local/env (1 prefixes)
 ENV001 info file:///golden/local/env
   Found: `/golden/local/env` has 13 recorded conda transactions (revision 12; review threshold 10). Repeated changes make the original dependency choices harder to review.

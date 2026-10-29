@@ -2,8 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,7 +30,7 @@ func TestLintTextFindingShowsObservationPathsSafetyAndNext(t *testing.T) {
 		OutcomeCounts: map[policy.Status]int{policy.FindingStatus: 1, policy.Disabled: 9, policy.NotApplicable: 2},
 	}
 	var out bytes.Buffer
-	if err := renderLint(&out, report, "text", true); err != nil {
+	if err := renderLint(&out, report, "text", true, true); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -63,7 +66,7 @@ func TestLintTextSummaryCountsVisibleFindings(t *testing.T) {
 		OutcomeCounts: map[policy.Status]int{policy.FindingStatus: 1, policy.Unknown: 3, policy.Suppressed: 1},
 	}
 	var out bytes.Buffer
-	if err := renderLint(&out, report, "text", true); err != nil {
+	if err := renderLint(&out, report, "text", true, true); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Summary: completed; 0 targets; 2 findings; 3 unknown; 1 suppressed") || strings.Count(out.String(), "Found:") != 2 {
@@ -83,7 +86,7 @@ func TestLintTextUsesInstanceNextAction(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var out bytes.Buffer
 			report := policy.Report{Findings: []policy.Finding{{RuleID: rule.ID, Next: test.next}}}
-			if err := renderLint(&out, report, "text", true); err != nil {
+			if err := renderLint(&out, report, "text", true, true); err != nil {
 				t.Fatal(err)
 			}
 			want := test.next
@@ -98,7 +101,7 @@ func TestLintTextUsesInstanceNextAction(t *testing.T) {
 				t.Fatalf("instance action did not replace generic action: %s", text)
 			}
 			out.Reset()
-			if err := renderLint(&out, report, "json", true); err != nil {
+			if err := renderLint(&out, report, "json", true, true); err != nil {
 				t.Fatal(err)
 			}
 			var decoded struct {
@@ -139,7 +142,7 @@ func TestLintTextImageEvidenceUsesAbsolutePathsAndSourceLayers(t *testing.T) {
 		}},
 	}
 	var out bytes.Buffer
-	if err := renderLint(&out, report, "text", true); err != nil {
+	if err := renderLint(&out, report, "text", true, true); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -157,7 +160,7 @@ func TestLintTextImageEvidenceUsesAbsolutePathsAndSourceLayers(t *testing.T) {
 		t.Fatalf("sampled path rendered %d times: %s", n, text)
 	}
 	out.Reset()
-	if err := renderLint(&out, report, "json", true); err != nil {
+	if err := renderLint(&out, report, "json", true, true); err != nil {
 		t.Fatal(err)
 	}
 	var decoded policy.Report
@@ -222,7 +225,7 @@ func TestLintTextSanitizesEveryReportField(t *testing.T) {
 		SuppressionNotes: []policy.SuppressionNote{{Rule: unsafe, Status: unsafe, Reason: unsafe}},
 	}
 	var out bytes.Buffer
-	if err := renderLint(&out, report, "text", true); err != nil {
+	if err := renderLint(&out, report, "text", true, true); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), unsafe) || strings.Contains(out.String(), "\x1b") {
@@ -248,7 +251,7 @@ func TestLintRenderersPreserveWriteErrors(t *testing.T) {
 		if err := renderRules(failedLintWriter{}, format); err == nil || !strings.Contains(err.Error(), "output unavailable") {
 			t.Errorf("%s catalogue swallowed write error: %v", format, err)
 		}
-		if err := renderLint(failedLintWriter{}, policy.Report{}, format, true); err == nil || !strings.Contains(err.Error(), "output unavailable") {
+		if err := renderLint(failedLintWriter{}, policy.Report{}, format, true, true); err == nil || !strings.Contains(err.Error(), "output unavailable") {
 			t.Errorf("%s report swallowed write error: %v", format, err)
 		}
 	}
@@ -256,12 +259,67 @@ func TestLintRenderersPreserveWriteErrors(t *testing.T) {
 
 func TestLintTextRejectsMissingRuleMetadata(t *testing.T) {
 	var out bytes.Buffer
-	err := renderLint(&out, policy.Report{Findings: []policy.Finding{{RuleID: "unregistered"}}}, "text", true)
+	err := renderLint(&out, policy.Report{Findings: []policy.Finding{{RuleID: "unregistered"}}}, "text", true, true)
 	if err == nil || !strings.Contains(err.Error(), "rule metadata unavailable") {
 		t.Fatalf("missing recommendation metadata was hidden: %v", err)
 	}
-	err = renderLint(failedLintWriter{}, policy.Report{Findings: []policy.Finding{{RuleID: "unregistered"}}}, "text", true)
+	err = renderLint(failedLintWriter{}, policy.Report{Findings: []policy.Finding{{RuleID: "unregistered"}}}, "text", true, true)
 	if err == nil || !strings.Contains(err.Error(), "rule metadata unavailable") || !strings.Contains(err.Error(), "output unavailable") {
 		t.Fatalf("metadata failure lost an earlier write error: %v", err)
+	}
+}
+
+func TestLintCollectionDiagnosticsRequireVerbose(t *testing.T) {
+	root := t.TempDir()
+	// JSON escapes this valid name on every OS, as it does Windows separators.
+	prefix := venvFixture(t, root, "broken&env", false)
+	metadata := filepath.Join(prefix, "Lib/site-packages/certifi.dist-info/METADATA")
+	if err := os.MkdirAll(filepath.Dir(metadata), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadata, []byte("invalid metadata"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, verbose := range []bool{false, true} {
+		args := []string{"lint", "--rule", "ENV013", root}
+		if verbose {
+			args = append(args, "--verbose")
+		}
+		stdout, stderr, err := runCLI(t, context.Background(), args...)
+		if ExitCode(err) != 2 || stderr != "" {
+			t.Fatalf("incomplete metadata must remain an inspection failure: %v\n%s\n%s", err, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "1 environments found; 0 inspected; 1 failed; 0 access errors") {
+			t.Fatalf("missing inspection summary: %s", stdout)
+		}
+		if strings.Contains(stdout, "Inspection issue") != verbose || strings.Contains(stdout, "Check ENV013 unknown") != verbose || strings.Contains(stdout, metadata) != verbose {
+			t.Fatalf("individual collection diagnostics must require verbose=%v: %s", verbose, stdout)
+		}
+		if strings.Contains(stdout, "use --verbose") == verbose {
+			t.Fatalf("verbosity hint must only appear when needed: %s", stdout)
+		}
+	}
+	stdout, stderr, err := runCLI(t, context.Background(), "lint", "--rule", "ENV013", "--format", "json", root)
+	if ExitCode(err) != 2 || stderr != "" {
+		t.Fatalf("JSON must preserve diagnostics and summary without progress output: %v\n%s\n%s", err, stdout, stderr)
+	}
+	var report policy.Report
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatal(err)
+	}
+	foundMetadata := false
+	for _, issue := range report.Issues {
+		foundMetadata = foundMetadata || issue.Path == metadata
+	}
+	if !foundMetadata || report.Inspection == nil || report.Inspection.Failed != 1 || report.Status != "incomplete" {
+		t.Fatalf("JSON must retain the decoded diagnostic path and summary: %s", stdout)
+	}
+}
+
+func TestLintSummaryDoesNotCountFindingsAsFailedEnvironments(t *testing.T) {
+	prefix := caStaleFixture(t)
+	stdout, _, err := runCLI(t, context.Background(), "lint", "--rule", "ENV013", prefix)
+	if ExitCode(err) != 1 || !strings.Contains(stdout, "1 environments found; 1 inspected; 0 failed; 0 access errors") || strings.Count(stdout, "ENV013 warning") != 1 {
+		t.Fatalf("rule warnings stay visible and do not mean inspection failed: %v\n%s", err, stdout)
 	}
 }

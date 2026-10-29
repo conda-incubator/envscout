@@ -14,7 +14,7 @@ const (
 	// SchemaVersion is the JSON report contract; 4 adds per-instance next actions.
 	SchemaVersion = 4
 	// RulesetVersion changes when rule identities or predicates change.
-	RulesetVersion = "5"
+	RulesetVersion = "6"
 	// ProfileVersion is the version of the lint profile set.
 	ProfileVersion = "3"
 	MaxSamples     = 20
@@ -98,6 +98,8 @@ type Rule struct {
 	Fix               string                 `json:"recommendation,omitempty"`
 	References        []string               `json:"references"`
 	Exceptions        []string               `json:"known_exceptions"`
+	// A nil VirtualenvCapabilities means this rule is not yet supported for venvs.
+	VirtualenvCapabilities []string `json:"virtualenv_capabilities,omitempty"`
 	// SupportsRevisionThreshold is true only for rules whose option set accepts a revision threshold.
 	SupportsRevisionThreshold bool `json:"-"`
 	// Check returns the rule's observation; the engine supplies target/ID/status.
@@ -173,27 +175,28 @@ type TargetReport struct {
 }
 
 type Report struct {
-	SchemaVersion    int               `json:"schema_version"`
-	Tool             string            `json:"tool"`
-	ToolVersion      string            `json:"tool_version"`
-	RulesetVersion   string            `json:"ruleset_version"`
-	ProfileVersion   string            `json:"profile_version"`
-	Profile          string            `json:"profile"`
-	Source           string            `json:"source"`
-	RuntimePrefix    string            `json:"runtime_prefix,omitempty"`
-	Project          string            `json:"project,omitempty"`
-	StartedAt        time.Time         `json:"started_at"`
-	EvaluatedAt      time.Time         `json:"evaluated_at"`
-	ConfigDigest     string            `json:"config_digest"`
-	Policy           Policy            `json:"policy"`
-	Targets          []TargetReport    `json:"targets"`
-	Outcomes         []Outcome         `json:"outcomes"`
-	OutcomeCounts    map[Status]int    `json:"outcome_counts"`
-	Findings         []Finding         `json:"findings"`
-	Issues           []evidence.Issue  `json:"issues"`
-	SuppressionNotes []SuppressionNote `json:"suppression_notes"`
-	Status           string            `json:"status"`
-	Limits           ReportLimits      `json:"limits"`
+	SchemaVersion    int                         `json:"schema_version"`
+	Tool             string                      `json:"tool"`
+	ToolVersion      string                      `json:"tool_version"`
+	RulesetVersion   string                      `json:"ruleset_version"`
+	ProfileVersion   string                      `json:"profile_version"`
+	Profile          string                      `json:"profile"`
+	Source           string                      `json:"source"`
+	RuntimePrefix    string                      `json:"runtime_prefix,omitempty"`
+	Project          string                      `json:"project,omitempty"`
+	StartedAt        time.Time                   `json:"started_at"`
+	EvaluatedAt      time.Time                   `json:"evaluated_at"`
+	ConfigDigest     string                      `json:"config_digest"`
+	Policy           Policy                      `json:"policy"`
+	Targets          []TargetReport              `json:"targets"`
+	Outcomes         []Outcome                   `json:"outcomes"`
+	OutcomeCounts    map[Status]int              `json:"outcome_counts"`
+	Findings         []Finding                   `json:"findings"`
+	Issues           []evidence.Issue            `json:"issues"`
+	SuppressionNotes []SuppressionNote           `json:"suppression_notes"`
+	Status           string                      `json:"status"`
+	Limits           ReportLimits                `json:"limits"`
+	Inspection       *evidence.InspectionSummary `json:"inspection,omitempty"`
 }
 
 type ReportLimits struct {

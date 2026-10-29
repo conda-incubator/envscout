@@ -123,7 +123,7 @@ ENV012  Requested packages have no version constraint
 
 ENV013  CA packages below eMudhra remediation minimum
   Why: Applications using an environment's CA packages need the distribution's recommended updates following the October 2026 eMudhra intermediate-certificate compromise.
-  Fix: Update certifi to >=2026.10.19 and ca-certificates to >=2026.10.19 on conda-forge or >=2026.10.20 on Anaconda main, in each affected prefix; update image builds and project locks as appropriate. Keep certificate verification enabled.
+  Fix: In virtualenvs, update certifi to >=2026.10.18 with the environment's package manager. In conda prefixes, update certifi to >=2026.10.19 and ca-certificates to >=2026.10.19 on conda-forge or >=2026.10.20 on Anaconda main; update image builds and project locks as appropriate. Keep certificate verification enabled.
   Enabled profiles: container (warning), container-development (warning), container-distroless (warning), container-runtime (warning), local (warning)
   Docs:
     https://conda.org/blog/2026-10-21-emudhra-security-updates/
@@ -131,8 +131,8 @@ ENV013  CA packages below eMudhra remediation minimum
     https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2
   Exceptions:
     Minimums were verified on 2026-10-26 for the official conda-forge and Anaconda main channels; custom or missing channel identities are unknown.
-    certifi 2026.10.18 already fixes the incident but falls below the distributions' recommended minimum; older metadata is not proof that an affected certificate remains or is trusted.
-    Only conda package metadata is checked, not pip distributions, vendored copies, PEM contents, custom CA files or the operating system trust store.
+    certifi 2026.10.18 already fixes the incident but falls below the conda distributions' recommended minimum; it meets the upstream virtualenv minimum. Older metadata is not proof that an affected certificate remains or is trusted.
+    Only conda package metadata and local virtualenv certifi distribution metadata are checked, not inherited system packages, pip-vendored copies, PEM contents, custom CA files or the operating system trust store.
     Python/package pins or retired platforms may prevent updates; use a supported environment or distribution rather than disabling TLS verification.
 
 IMG001  Package archives shipped in image

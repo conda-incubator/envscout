@@ -3,9 +3,11 @@ package lint
 import (
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"runtime"
 	"strings"
 
+	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/conda-incubator/envscout/internal/evidence"
 	gorattler "github.com/conda-incubator/go-rattler"
 )
@@ -37,6 +39,9 @@ func caPackageMinimum(record gorattler.PrefixRecord) (minimum, channel string) {
 }
 
 func checkCAPackages(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
+	if target.IsVirtualenv() {
+		return checkVirtualenvCertifi(target, opts, rule)
+	}
 	outcome := localRecordOutcome(target)
 	outcome.SubjectCount = 0
 	var findings []Finding
@@ -96,6 +101,54 @@ func checkCAPackages(target evidence.Target, opts RuleOptions, rule Rule) (Outco
 			outcome.Status, outcome.Reason = NotApplicable, "no certifi or ca-certificates conda package was found in the inspected prefixes"
 		} else {
 			outcome.Reason = "observed CA package versions meet the recorded channel's recommended minimums; certificate content and active trust are not inspected"
+		}
+	}
+	return outcome, findings
+}
+
+func checkVirtualenvCertifi(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
+	outcome := Outcome{Status: Pass}
+	if !completeOf(target, "prefixes") || !completeOf(target, "python-distributions") {
+		outcome.Status, outcome.Reason = Unknown, "virtualenv discovery or installed Python metadata coverage is incomplete"
+	}
+	prefix := target.Prefixes[0]
+	const minimum = "2026.10.18"
+	patched := pep440.MustParse(minimum)
+	var findings []Finding
+	for _, distribution := range target.Python {
+		name, valid := canonicalPythonName(distribution.Name)
+		if !valid || name != "certifi" {
+			continue
+		}
+		outcome.SubjectCount++
+		version, err := pep440.Parse(distribution.Version)
+		if err != nil || !pythonWithin(prefix, distribution) {
+			outcome.Status, outcome.Reason = Unknown, "virtualenv certifi has no comparable version or local metadata source path"
+			continue
+		}
+		if !version.LessThan(patched) {
+			continue
+		}
+		if len(findings) >= MaxFindings {
+			outcome.limited = true
+			outcome.Status, outcome.Reason = Unknown, "virtualenv certifi evaluation limit reached"
+			return outcome, findings
+		}
+		finding := newFinding(target, rule, opts.Severity, []string{distribution.Path}, nil)
+		finding.Evidence.Count = 1
+		finding.Message = fmt.Sprintf("certifi %s in virtualenv %s, recorded at %s, is below the upstream patched minimum %s following the October 2026 eMudhra incident. Package metadata does not establish certificate contents or active trust.", distribution.Version, quotedPaths([]string{prefix.Path}), quotedPaths(finding.Evidence.Paths), minimum)
+		if runtime.GOOS == "windows" {
+			finding.Next = fmt.Sprintf("Use this virtualenv's interpreter at %s with `-m pip install --upgrade \"certifi>=%s\"`, or update its project specification and lock with the project's package manager. Keep certificate verification enabled.", quotedPaths([]string{filepath.Join(prefix.Path, "Scripts", "python.exe")}), minimum)
+		} else {
+			finding.Next = fmt.Sprintf("In a POSIX shell, run `%s -m pip install --upgrade %s`, or update this virtualenv's project specification and lock with its package manager. Keep certificate verification enabled.", commandArg(filepath.Join(prefix.Path, "bin", "python")), commandArg("certifi>="+minimum))
+		}
+		findings = append(findings, finding)
+	}
+	if outcome.Status == Pass {
+		if outcome.SubjectCount == 0 {
+			outcome.Status, outcome.Reason = NotApplicable, "no local certifi distribution metadata was found in the virtualenv; inherited and vendored bundles are not inspected"
+		} else {
+			outcome.Reason = "observed virtualenv certifi versions meet the upstream patched minimum; certificate content and active trust are not inspected"
 		}
 	}
 	return outcome, findings

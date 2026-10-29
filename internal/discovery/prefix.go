@@ -35,7 +35,7 @@ func inspectScopedPrefix(ctx context.Context, scope *os.Root, prefix string, rea
 	if errors.Is(err, fs.ErrNotExist) {
 		return env, false, issues
 	}
-	return Environment{}, false, append(issues, Issue{Path: filepath.Join(prefix, "conda-meta"), Error: err.Error()})
+	return Environment{}, false, append(issues, issueFromError(filepath.Join(prefix, "conda-meta"), err))
 }
 
 // inspectVenv confirms a venv from a regular pyvenv.cfg. Absence is silent; a symlink or
@@ -48,7 +48,7 @@ func inspectVenv(scope *os.Root, prefix string) (Environment, bool, []Issue) {
 		return Environment{}, false, nil
 	}
 	if err != nil {
-		return Environment{}, false, []Issue{{Path: markerPath, Error: err.Error()}}
+		return Environment{}, false, []Issue{issueFromError(markerPath, err)}
 	}
 	if !info.Mode().IsRegular() {
 		return Environment{}, false, []Issue{{Path: markerPath, Error: "pyvenv.cfg is not a regular file; links are not followed"}}
@@ -64,20 +64,20 @@ func inspectCondaPrefix(ctx context.Context, scope *os.Root, prefix string, read
 	metaPath := filepath.Join(prefix, "conda-meta")
 	meta, err := scope.Lstat("conda-meta")
 	if err != nil {
-		return Environment{}, false, append(issues, Issue{Path: metaPath, Error: err.Error()})
+		return Environment{}, false, append(issues, issueFromError(metaPath, err))
 	}
 	if !meta.IsDir() {
 		return Environment{}, false, append(issues, Issue{Path: metaPath, Error: "conda-meta is not a directory"})
 	}
 	metaRoot, err := scope.OpenRoot("conda-meta")
 	if err != nil {
-		return Environment{}, false, append(issues, Issue{Path: metaPath, Error: err.Error()})
+		return Environment{}, false, append(issues, issueFromError(metaPath, err))
 	}
 	defer func() { _ = metaRoot.Close() }()
 
 	hasRecord, truncated, err := hasRecordEntry(ctx, metaRoot)
 	if err != nil {
-		return Environment{}, false, append(issues, Issue{Path: metaPath, Error: err.Error()})
+		return Environment{}, false, append(issues, issueFromError(metaPath, err))
 	}
 	if truncated {
 		issues = append(issues, Issue{Path: metaPath, Error: fmt.Sprintf("conda-meta exceeds %d entries; record scan truncated", maxRecordsPerPrefix)})
@@ -91,7 +91,7 @@ func inspectCondaPrefix(ctx context.Context, scope *os.Root, prefix string, read
 	}
 	rev, err := readRevision(ctx, metaRoot, "history")
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		issues = append(issues, Issue{Path: filepath.Join(metaPath, "history"), Error: err.Error()})
+		issues = append(issues, issueFromError(filepath.Join(metaPath, "history"), err))
 	}
 	env.Revision = rev
 	return env, true, issues
