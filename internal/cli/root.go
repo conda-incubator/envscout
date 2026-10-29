@@ -23,6 +23,7 @@ type commandOptions struct {
 	platform  string
 	noColor   bool
 	verbose   bool
+	excludes  []string
 	outputDir string
 }
 
@@ -41,6 +42,7 @@ func New() *cobra.Command {
 	flags.StringVar(&opts.platform, "platform", "", "required for oci-archive: OS/ARCH[/VARIANT]")
 	flags.BoolVar(&opts.noColor, "no-color", false, "disable colored output")
 	flags.BoolVar(&opts.verbose, "verbose", false, "show individual discovery and inspection diagnostics (find and lint)")
+	flags.StringArrayVar(&opts.excludes, "exclude", nil, "exclude folders from discovery by glob (repeatable; quote patterns)")
 	flags.StringVar(&opts.outputDir, "output-dir", opts.outputDir, "directory for SBOM output (scan only)")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return inputError(err) })
 	// Only scan writes SBOMs, so an explicit --output-dir elsewhere would be silently ignored.
@@ -51,6 +53,11 @@ func New() *cobra.Command {
 		if cmd.Name() != "find" && cmd.Name() != "lint" && cmd.Flags().Changed("verbose") {
 			return inputError(fmt.Errorf("--verbose is only valid for find and lint"))
 		}
+		ctx, err := discovery.WithExclusions(cmd.Context(), opts.excludes)
+		if err != nil {
+			return inputError(err)
+		}
+		cmd.SetContext(ctx)
 		return nil
 	}
 	root.AddCommand(findCommand(opts), scanCommand(opts), lintCommand(opts))
