@@ -26,7 +26,7 @@ Existing regular SBOM files are counted as pre-existing, left untouched and not 
 
 All commands support `--format text|json` and `--no-color`. Only `scan` accepts `--output-dir`. Flags may precede or follow the subcommand. Ctrl-C cancels the command.
 
-Interactive text scans show discovery progress followed by completed, pre-existing and failed SBOM counts, a spinner and approximate remaining time. The estimate uses completed new scans, not fast skips, and shows "estimating" until a sample is available. Environment sizes and unfinished skips can change the estimate. JSON and redirected output have no live progress display.
+Interactive text scans and lint runs show discovery progress followed by work counts, a spinner, approximate remaining time and iterations/sec. Estimates use successful new scans or lint evidence passes, excluding discovery, prior lint validation, pre-existing skips and failures, and show "estimating" until a sample is available. Environment sizes and unfinished skips can change the estimate. JSON and redirected output have no live progress display.
 
 Without roots, `find` checks known installation and configuration locations; it does not search the whole filesystem.
 

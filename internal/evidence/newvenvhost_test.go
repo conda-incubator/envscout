@@ -245,6 +245,10 @@ func TestHostInspectionCountsLocalFailuresNotNeighborCoverage(t *testing.T) {
 	if !counts.Started.Load() || counts.Total.Load() != 3 || counts.Finished.Load() != 3 || counts.Failed.Load() != 2 || counts.Active.Load() != 0 {
 		t.Fatalf("live progress must match the completed summary: total=%d finished=%d failed=%d active=%d", counts.Total.Load(), counts.Finished.Load(), counts.Failed.Load(), counts.Active.Load())
 	}
+	// A fast inspection can finish within one clock tick, especially on Windows.
+	if counts.Inspected.Load() != 1 || counts.InspectionDuration.Load() < 0 || counts.ActiveStarted.Load() != 0 {
+		t.Fatal("successful inspection must count without negative duration or a stale active timer")
+	}
 	snapshot, err = CollectHost(context.Background(), []string{t.TempDir()}, Request{Capabilities: []string{"prefixes"}})
 	if err != nil || len(snapshot.Targets) != 1 || snapshot.Inspection.Found != 0 || snapshot.Inspection.Inspected != 0 || snapshot.Inspection.Failed != 0 {
 		t.Fatalf("fallback root targets must not count as inspected environments: %+v %v", snapshot, err)

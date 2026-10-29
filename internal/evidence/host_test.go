@@ -112,7 +112,8 @@ func TestHostCancellationPreservesPartialFindings(t *testing.T) {
 	sawPartial := false
 	for limit := 1; limit < 2000; limit++ {
 		ctx := &countdownContext{Context: context.Background(), limit: limit}
-		snapshot, err := CollectHost(ctx, roots, Request{Capabilities: []string{"prefixes", "history"}})
+		counts := &Progress{}
+		snapshot, err := CollectHost(WithProgress(ctx, counts), roots, Request{Capabilities: []string{"prefixes", "history"}})
 		if err == nil {
 			continue
 		}
@@ -133,6 +134,9 @@ func TestHostCancellationPreservesPartialFindings(t *testing.T) {
 			sawPartial = true
 		}
 		if sawPartial {
+			if counts.Inspected.Load() != 0 || counts.InspectionDuration.Load() != 0 || counts.ActiveStarted.Load() != 0 || counts.Active.Load() != 0 {
+				t.Fatal("canceled inspections must not add timing samples or leave an active timer")
+			}
 			if summary := snapshot.Inspection; summary == nil || summary.Inspected != 0 || summary.Failed != 0 || summary.Found == 0 {
 				t.Fatalf("canceled attempts must remain unfinished: %+v", summary)
 			}

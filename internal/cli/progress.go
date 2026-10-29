@@ -76,7 +76,7 @@ func startLintProgress(ctx context.Context, out io.Writer, enabled bool) (contex
 		return ctx, func() error { return nil }
 	}
 	ticker := time.NewTicker(progressInterval)
-	ctx, _, _, closeFn := startLintProgressCore(ctx, out, scanCoreConfig{width: terminalWidth(out), enabled: true, tick: ticker.C, stopTicker: ticker.Stop})
+	ctx, _, _, closeFn := startLintProgressCore(ctx, out, scanCoreConfig{width: terminalWidth(out), enabled: true, tick: ticker.C, stopTicker: ticker.Stop, now: time.Now})
 	return ctx, closeFn
 }
 
@@ -95,8 +95,7 @@ func startLintProgressCore(ctx context.Context, out io.Writer, cfg scanCoreConfi
 		if !inspectionCounts.Started.Load() {
 			return fmt.Sprintf("Folders scanned: %d | Environments found: %d", discoveryCounts.Folders.Load(), discoveryCounts.Environments.Load())
 		}
-		finished, failed := inspectionCounts.Finished.Load(), inspectionCounts.Failed.Load()
-		return fmt.Sprintf("%s Linting environments: %d/%d finished | %d inspected | %d failed | %d active", spinnerFrames[(ticks-1)%len(spinnerFrames)], finished, inspectionCounts.Total.Load(), finished-min(finished, failed), failed, inspectionCounts.Active.Load())
+		return lintLine(inspectionCounts, cfg.now(), spinnerFrames[(ticks-1)%len(spinnerFrames)])
 	}
 	return ctx, discoveryCounts, inspectionCounts, runProgressLoop(ctx, out, cfg.width, cfg.tick, cfg.stopTicker, line)
 }
@@ -192,24 +191,38 @@ func runProgressLoop(ctx context.Context, out io.Writer, width int, tick <-chan 
 
 // sbomLine estimates remaining time from actual new scans, never fast skips.
 func sbomLine(counts *inventory.Progress, now time.Time, spin string) string {
-	remaining := "estimating"
 	finished, total := counts.Finished.Load(), counts.Total.Load()
+	remaining, rate := progressEstimate(finished, total, counts.Cataloged.Load(), counts.CatalogDuration.Load(), counts.ActiveStarted.Load(), now)
+	return fmt.Sprintf("%s Creating SBOMs: %d/%d finished | remaining %s | %s it/s | %d pre-existing | %d failed | %d active",
+		spin, finished, total, remaining, rate, counts.PreExisting.Load(), counts.Failed.Load(), counts.Active.Load())
+}
+
+func lintLine(counts *evidence.Progress, now time.Time, spin string) string {
+	finished, total, failed := counts.Finished.Load(), counts.Total.Load(), counts.Failed.Load()
+	remaining, rate := progressEstimate(finished, total, counts.Inspected.Load(), counts.InspectionDuration.Load(), counts.ActiveStarted.Load(), now)
+	return fmt.Sprintf("%s Linting environments: %d/%d finished | remaining %s | %s it/s | %d inspected | %d failed | %d active",
+		spin, finished, total, remaining, rate, finished-min(finished, failed), failed, counts.Active.Load())
+}
+
+// Fast skips and rejected inputs are not timing samples for unfinished work.
+func progressEstimate(finished, total, samples uint64, duration, activeStarted int64, now time.Time) (string, string) {
+	remaining, rate := "estimating", "--"
+	if samples > 0 && duration > 0 {
+		rate = fmt.Sprintf("%.2f", float64(samples)/float64(duration)*float64(time.Second))
+	}
 	if finished >= total {
 		remaining = "00:00"
-	} else if samples := counts.Cataloged.Load(); samples > 0 {
-		nanos := float64(counts.CatalogDuration.Load()) / float64(samples) * float64(total-finished)
-		if counts.Active.Load() > 0 {
-			if started := counts.ActiveStarted.Load(); started > 0 {
-				nanos -= float64(max(now.Sub(time.Unix(0, started)), 0))
-			}
+	} else if samples > 0 && duration > 0 {
+		nanos := float64(duration) / float64(samples) * float64(total-finished)
+		if activeStarted > 0 {
+			nanos -= float64(max(now.Sub(time.Unix(0, activeStarted)), 0))
 		}
 		if nanos > 0 && nanos < float64(time.Duration(1<<63-1)) {
 			seconds := int64(math.Ceil(nanos / float64(time.Second)))
 			remaining = fmt.Sprintf("~%02d:%02d", seconds/60, seconds%60)
 		}
 	}
-	return fmt.Sprintf("%s Creating SBOMs: %d/%d finished | remaining %s | %d pre-existing | %d failed | %d active",
-		spin, finished, total, remaining, counts.PreExisting.Load(), counts.Failed.Load(), counts.Active.Load())
+	return remaining, rate
 }
 
 // terminalWidth reads the terminal width once. Zero means unknown.

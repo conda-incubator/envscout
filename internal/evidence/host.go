@@ -113,19 +113,22 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			if len(req.VirtualenvCapabilities) == 0 {
 				snapshot.Issues = append(snapshot.Issues, Issue{Capability: "evaluation", Path: env.Path, Message: "virtualenv lint is not supported by the selected rules; use find or scan"})
 				snapshot.Inspection.Failed++
-				progress.finish(true)
+				progress.finish(true, 0)
 			} else {
 				validated = append(validated, Target{ID: FileID(env.Path), Kind: "dir", Input: env.Path, Roots: report.Roots,
 					Prefixes: []Prefix{{Kind: env.Kind, Path: env.Path, RecordCoverage: NotCollected}}, Coverage: map[string]string{}, Issues: []Issue{}})
 			}
 			continue
 		}
+		start := time.Now()
 		if progress != nil {
+			progress.ActiveStarted.Store(start.UnixNano())
 			progress.Active.Store(1)
 		}
 		records, err := condaRecordsForPrefix(ctx, env.Path)
 		if progress != nil {
 			progress.Active.Store(0)
+			progress.ActiveStarted.Store(0)
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			cancelErr = ctxErr
@@ -137,7 +140,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		if len(records) == 0 {
 			if cancelErr == nil {
 				snapshot.Inspection.Failed++
-				progress.finish(true)
+				progress.finish(true, 0)
 			}
 			if err == nil {
 				snapshot.Issues = append(snapshot.Issues, Issue{Capability: "prefixes", Path: env.Path, Message: "no valid conda package metadata; prefix not counted"})
@@ -225,7 +228,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 				snapshot.Inspection.AccessErrors += accessErrorCount(err)
 				if ctx.Err() == nil {
 					snapshot.Inspection.Failed++
-					progress.finish(true)
+					progress.finish(true, 0)
 				}
 				return snapshot, err
 			}
@@ -248,7 +251,9 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			}
 			continue
 		}
+		start := time.Now()
 		if progress != nil {
+			progress.ActiveStarted.Store(start.UnixNano())
 			progress.Active.Store(1)
 		}
 		if err := collectHostFacts(ctx, target, req.ForEnvironment(target.Prefixes[0].Kind), caches); err != nil {
@@ -257,6 +262,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		if ctx.Err() != nil {
 			if progress != nil {
 				progress.Active.Store(0)
+				progress.ActiveStarted.Store(0)
 			}
 			continue
 		}
@@ -271,7 +277,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		} else {
 			snapshot.Inspection.Inspected++
 		}
-		progress.finish(failed)
+		progress.finish(failed, time.Since(start))
 	}
 	if len(snapshot.Targets) == 0 && len(report.Roots) > 0 {
 		snapshot.Targets = append(snapshot.Targets, Target{ID: FileID(report.Roots[0]), Kind: "dir", Input: report.Roots[0], Roots: report.Roots,
