@@ -9,6 +9,7 @@ Building requires Go 1.26.8+, Rust/Cargo, Make, and a C compiler.
 
 ```sh
 make build
+source <(./envscout completion zsh)
 ./envscout find
 ./envscout find --format json
 ./envscout find /path/to/environments
@@ -25,7 +26,7 @@ Existing regular SBOM files are counted as pre-existing, left untouched and not 
 
 All commands support `--format text|json` and `--no-color`. Only `scan` accepts `--output-dir`. Flags may precede or follow the subcommand. Ctrl-C cancels the command.
 
-Interactive text scans show discovery progress followed by completed, pre-existing and failed SBOM counts, a spinner and approximate remaining time. The estimate uses completed new scans, not fast skips, and shows "estimating" until a sample is available. Environment sizes and unfinished skips can change the estimate. JSON and redirected output have no live progress display.
+Interactive text scans and lint runs show discovery progress followed by work counts, a spinner, approximate remaining time and iterations/sec. Estimates use successful new scans or lint evidence passes, excluding discovery, prior lint validation, pre-existing skips and failures, and show "estimating" until a sample is available. Environment sizes and unfinished skips can change the estimate. JSON and redirected output have no live progress display.
 
 Without roots, `find` checks known installation and configuration locations; it does not search the whole filesystem.
 
@@ -38,6 +39,8 @@ Explicit-root searches do not follow symlinks or cross filesystem-device boundar
 All three commands accept repeatable folder globs, for example `./envscout lint --rule ENV013 --exclude '.cache' --exclude '**/build' ~/`. Quote patterns; bare names match at any depth, `/` patterns are search-root relative (current directory for no-root `find`, `/` for images), and absolute paths also work. Matches are case-sensitive and skip entire subtrees, including explicit roots.
 
 Exclusions apply only to discovery, not package files inside selected environments or whole-image SBOMs/image-wide lint evidence.
+
+On macOS, [Transparency, Consent, and Control (TCC)](https://developer.apple.com/forums/thread/678819) can show a Files and Folders consent dialog for protected locations such as Documents, Desktop and Downloads. [Folder access can block until you respond](https://developer.apple.com/forums/thread/126430); approve access to continue, or use `--exclude 'Documents'` (repeatable) to avoid those folders during discovery. Exclusions do not prevent prompts from later access inside selected environments.
 
 For OCI archives, specify a platform:
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/conda-incubator/envscout/internal/evidence"
 	"github.com/conda-incubator/envscout/internal/inventory"
 )
 
@@ -225,7 +226,7 @@ func TestLintProgressSwitchesPhaseAndStaysAlive(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := w.String()
-	if !strings.Contains(text, "Folders scanned: 30 | Environments found: 4") || !strings.Contains(text, "/ Linting environments: 2/4 finished | 1 inspected | 1 failed | 1 active") || !strings.Contains(text, "- Linting environments: 2/4 finished") || !strings.Contains(text, "0/4 finished | 0 inspected") || strings.Contains(text, "184467") || !strings.HasSuffix(text, progressClear) {
+	if !strings.Contains(text, "Folders scanned: 30 | Environments found: 4") || !strings.Contains(text, "/ Linting environments: 2/4 finished") || !strings.Contains(text, "1 inspected | 1 failed | 1 active") || !strings.Contains(text, "- Linting environments: 2/4 finished") || !strings.Contains(text, "0 inspected | 1 failed") || strings.Contains(text, "184467") || !strings.HasSuffix(text, progressClear) {
 		t.Fatalf("lint must display both phases, advance the spinner, and clear: %q", text)
 	}
 }
@@ -256,6 +257,80 @@ func TestLintProgressReturnsWriteFailure(t *testing.T) {
 	tick <- time.Time{}
 	if err := closeFn(); !errors.Is(err, writeErr) {
 		t.Fatalf("lint progress must preserve write failure: %v", err)
+	}
+}
+
+func TestLintProgressEstimatesTimeAndThroughputAfterDiscovery(t *testing.T) {
+	w := newAckWriter()
+	tick := make(chan time.Time)
+	clock := newFakeClock()
+	_, discoveryP, counts, closeFn := startLintProgressCore(context.Background(), w, scanCfg(tick, clock))
+	discoveryP.Folders.Store(30)
+	tickAndAwait(t, tick, w)
+	clock.Advance(time.Hour) // Discovery and prior validation must not affect evidence-pass estimates.
+	counts.Total.Store(4)
+	counts.Started.Store(true)
+	counts.Finished.Store(2)
+	counts.Failed.Store(1)
+	counts.Inspected.Store(1)
+	counts.InspectionDuration.Store(int64(10 * time.Second))
+	counts.Active.Store(1)
+	counts.ActiveStarted.Store(clock.Now().UnixNano())
+	tickAndAwait(t, tick, w)
+	clock.Advance(3 * time.Second)
+	tickAndAwait(t, tick, w)
+	if err := closeFn(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"2/4 finished", "remaining ~00:20", "remaining ~00:17", "0.10 it/s", "1 failed"} {
+		if !strings.Contains(w.String(), want) {
+			t.Fatalf("lint progress missing %q: %q", want, w.String())
+		}
+	}
+}
+
+func TestLintProgressWithoutSamplesOverrunAndCompletion(t *testing.T) {
+	counts := &evidence.Progress{}
+	counts.Total.Store(3)
+	counts.Finished.Store(2)
+	counts.Failed.Store(2)
+	now := time.Unix(1000, 0)
+	if line := lintLine(counts, now, "|"); !strings.Contains(line, "remaining estimating") || strings.Contains(line, "Inf") || strings.Contains(line, "NaN") {
+		t.Fatalf("fast rejection is not an inspection timing sample: %s", line)
+	}
+	counts.Inspected.Store(1)
+	if line := lintLine(counts, now, "|"); !strings.Contains(line, "remaining estimating | -- it/s") || strings.Contains(line, "Inf") || strings.Contains(line, "NaN") {
+		t.Fatalf("a successful inspection below clock resolution must not invent an estimate or rate: %s", line)
+	}
+	counts.InspectionDuration.Store(int64(time.Second))
+	counts.Active.Store(1)
+	counts.ActiveStarted.Store(now.Add(-2 * time.Second).UnixNano())
+	if line := lintLine(counts, now, "|"); !strings.Contains(line, "remaining estimating") {
+		t.Fatalf("an inspection beyond the estimated duration must not claim zero remaining: %s", line)
+	}
+	counts.Finished.Store(3)
+	if line := lintLine(counts, now, "|"); !strings.Contains(line, "remaining 00:00") {
+		t.Fatalf("completed lint should report zero remaining: %s", line)
+	}
+}
+
+func TestLintTimeAndThroughputVisibleOnStandardTerminal(t *testing.T) {
+	w := newAckWriter()
+	tick := make(chan time.Time)
+	cfg := scanCfg(tick, newFakeClock())
+	cfg.width = 80
+	_, _, counts, closeFn := startLintProgressCore(context.Background(), w, cfg)
+	counts.Started.Store(true)
+	counts.Total.Store(100)
+	counts.Finished.Store(99)
+	counts.Inspected.Store(99)
+	counts.InspectionDuration.Store(int64(990 * time.Second))
+	tickAndAwait(t, tick, w)
+	if err := closeFn(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(w.String(), "remaining ~00:10") || !strings.Contains(w.String(), "0.10 it/s") {
+		t.Fatalf("ETA and rate must not be truncated behind secondary counts: %q", w.String())
 	}
 }
 
@@ -309,8 +384,8 @@ func TestScanProgressSwitchesToSBOMPhaseAndEstimatesRemaining(t *testing.T) {
 	}
 	got := w.String()
 	for _, want := range []string{
-		"| Creating SBOMs: 3/4 finished | remaining ~01:30 | 1 pre-existing | 1 failed | 1 active",
-		"/ Creating SBOMs: 3/4 finished | remaining ~00:25 | 1 pre-existing | 1 failed | 1 active",
+		"| Creating SBOMs: 3/4 finished | remaining ~01:30 | 0.01 it/s | 1 pre-existing | 1 failed | 1 active",
+		"/ Creating SBOMs: 3/4 finished | remaining ~00:25 | 0.01 it/s | 1 pre-existing | 1 failed | 1 active",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output %q missing %q", got, want)
@@ -369,6 +444,9 @@ func TestSBOMRemainingWithoutSamplesAndOverrun(t *testing.T) {
 	}
 	counts.Cataloged.Store(1)
 	counts.CatalogDuration.Store(int64(time.Second))
+	if line := sbomLine(counts, time.Unix(1000, 0), "|"); !strings.Contains(line, "1.00 it/s") {
+		t.Fatalf("scan must display real cataloging throughput: %s", line)
+	}
 	counts.Active.Store(1)
 	counts.ActiveStarted.Store(time.Unix(998, 0).UnixNano())
 	if line := sbomLine(counts, time.Unix(1000, 0), "|"); !strings.Contains(line, "remaining estimating") {
@@ -396,8 +474,8 @@ func TestScanRemainingVisibleOnStandardTerminal(t *testing.T) {
 	if err := closeFn(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(w.String(), "remaining ~00:12") {
-		t.Fatalf("remaining time must not be truncated behind secondary counters: %q", w.String())
+	if !strings.Contains(w.String(), "remaining ~00:12") || !strings.Contains(w.String(), "0.08 it/s") {
+		t.Fatalf("remaining time and rate must not be truncated behind secondary counters: %q", w.String())
 	}
 }
 
