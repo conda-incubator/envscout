@@ -9,6 +9,7 @@ Building requires Go 1.26.8+, Rust/Cargo, Make, and a C compiler.
 
 ```sh
 make build
+source <(./envscout completion zsh)
 ./envscout find
 ./envscout find --format json
 ./envscout find /path/to/environments
@@ -38,6 +39,8 @@ Explicit-root searches do not follow symlinks or cross filesystem-device boundar
 All three commands accept repeatable folder globs, for example `./envscout lint --rule ENV013 --exclude '.cache' --exclude '**/build' ~/`. Quote patterns; bare names match at any depth, `/` patterns are search-root relative (current directory for no-root `find`, `/` for images), and absolute paths also work. Matches are case-sensitive and skip entire subtrees, including explicit roots.
 
 Exclusions apply only to discovery, not package files inside selected environments or whole-image SBOMs/image-wide lint evidence.
+
+On macOS, [Transparency, Consent, and Control (TCC)](https://developer.apple.com/forums/thread/678819) can show a Files and Folders consent dialog for protected locations such as Documents, Desktop and Downloads. [Folder access can block until you respond](https://developer.apple.com/forums/thread/126430); approve access to continue, or use `--exclude 'Documents'` (repeatable) to avoid those folders during discovery. Exclusions do not prevent prompts from later access inside selected environments.
 
 For OCI archives, specify a platform:
 
