@@ -25,13 +25,7 @@ func scanCommand(opts *commandOptions) *cobra.Command {
 			// The domain resolves a relative output directory against the working
 			// directory and returns any incomplete-scan error; the CLI only renders.
 			if opts.source == "oci-archive" {
-				ctx, cancel := operationContext(cmd.Context())
-				defer cancel()
-				report, err := inventory.InspectImage(ctx, inputs[0], opts.platform, opts.outputDir)
-				if err != nil && opts.format == "text" && report.Image.ManifestDigest == "" {
-					return err
-				}
-				return errors.Join(renderImage(cmd, opts, report, true), err)
+				return runImage(cmd, opts, inputs[0], true)
 			}
 			ctx, stopProgress := startScanProgress(cmd.Context(), cmd.ErrOrStderr(), opts.format == "text")
 			report, err := inventory.Scan(ctx, inputs, opts.outputDir)

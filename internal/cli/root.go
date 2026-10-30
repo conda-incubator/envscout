@@ -11,7 +11,6 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/conda-incubator/envscout/internal/discovery"
-	"github.com/conda-incubator/envscout/internal/inventory"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -97,13 +96,7 @@ func findCommand(opts *commandOptions) *cobra.Command {
 				return err
 			}
 			if opts.source == "oci-archive" {
-				ctx, cancel := operationContext(cmd.Context())
-				defer cancel()
-				report, err := inventory.InspectImage(ctx, roots[0], opts.platform, "")
-				if err != nil && opts.format == "text" && report.Image.ManifestDigest == "" {
-					return err
-				}
-				return errors.Join(renderImage(cmd, opts, report, false), err)
+				return runImage(cmd, opts, roots[0], false)
 			}
 			ctx, stopProgress := startDiscoveryProgress(cmd.Context(), cmd.ErrOrStderr(), opts.format == "text")
 			report, err := findLocal(ctx, roots)
