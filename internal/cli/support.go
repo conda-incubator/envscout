@@ -22,6 +22,8 @@ import (
 // are unbounded and use the caller's context directly.
 const operationTimeout = 5 * time.Minute
 
+const canceledExitCode = 130
+
 // commandExit carries an explicit exit code. Silent errors were already rendered
 // on stdout, so the caller must not print them again.
 type commandExit struct {
@@ -45,23 +47,34 @@ func inputError(err error) error { return &commandExit{code: 2, err: err} }
 // ExitCode maps a command error to a process status. Cancellation wins even when
 // wrapped in a commandExit, so 130 holds regardless of how the error was joined.
 func ExitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	if errors.Is(err, context.Canceled) {
-		return 130
-	}
-	var exit *commandExit
-	if errors.As(err, &exit) {
-		return exit.code
-	}
-	return 1
+	code, _ := classifyError(err)
+	return code
 }
 
 // ShouldPrintError reports whether the error text still needs to be written to stderr.
 func ShouldPrintError(err error) bool {
+	_, print := classifyError(err)
+	return print
+}
+
+// classifyError preserves cancellation precedence and the first explicit exit's silence.
+func classifyError(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	code := 1
+	canceled := errors.Is(err, context.Canceled)
+	if canceled {
+		code = canceledExitCode
+	}
 	var exit *commandExit
-	return err != nil && (!errors.As(err, &exit) || !exit.silent)
+	if errors.As(err, &exit) {
+		if !canceled {
+			code = exit.code
+		}
+		return code, !exit.silent
+	}
+	return code, true
 }
 
 // operationContext applies the per-operation timeout beneath the caller's context.
