@@ -120,7 +120,7 @@ func runLint(cmd *cobra.Command, opts *commandOptions, flags *lintFlags, inputs 
 		return err
 	}
 	if errors.Is(collectErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-		return &commandExit{code: 130, err: context.Canceled, silent: true}
+		return &commandExit{code: canceledExitCode, err: context.Canceled, silent: true}
 	}
 	if code := report.ExitCode(); code != 0 {
 		return &commandExit{code: code, silent: true}
