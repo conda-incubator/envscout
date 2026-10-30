@@ -1,11 +1,27 @@
 package cli
 
 import (
+	"errors"
 	"time"
 
 	"github.com/conda-incubator/envscout/internal/inventory"
 	"github.com/spf13/cobra"
 )
+
+// runImage shares image inspection while keeping find read-only and scan inventory-enabled.
+func runImage(cmd *cobra.Command, opts *commandOptions, input string, scan bool) error {
+	outputDir := ""
+	if scan {
+		outputDir = opts.outputDir
+	}
+	ctx, cancel := operationContext(cmd.Context())
+	defer cancel()
+	report, err := inventory.InspectImage(ctx, input, opts.platform, outputDir)
+	if err != nil && opts.format == "text" && report.Image.ManifestDigest == "" {
+		return err
+	}
+	return errors.Join(renderImage(cmd, opts, report, scan), err)
+}
 
 // renderImage writes an image inspection and its warnings. scan reports whether an
 // SBOM was requested. It returns only rendering errors; the caller joins the domain
