@@ -93,7 +93,7 @@ func renderGoldenWithConfig(t *testing.T, snapshot evidence.Snapshot, config pol
 		if next == "" {
 			next = rule.Fix
 		}
-		for _, want := range []string{"Found: " + lintText(finding.Message), "Evidence: " + lintText(finding.Evidence.Paths[0]), "Next: " + lintText(next)} {
+		for _, want := range []string{"Found: " + safeText(finding.Message), "Evidence: " + safeText(finding.Evidence.Paths[0]), "Next: " + safeText(next)} {
 			if !strings.Contains(out.String(), want) {
 				t.Fatalf("rendered %s omits %q: %s", finding.RuleID, want, out.String())
 			}

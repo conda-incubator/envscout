@@ -32,7 +32,7 @@ type commandExit struct {
 
 func (e *commandExit) Error() string {
 	if e.err != nil {
-		return lintText(e.err.Error())
+		return safeText(e.err.Error())
 	}
 	return "lint policy threshold exceeded"
 }
@@ -110,7 +110,7 @@ func (p *printer) Err() error {
 // renderIssues writes one warning line per discovery issue.
 func renderIssues(p *printer, prefix string, issues []discovery.Issue) {
 	for _, issue := range issues {
-		p.Printf("warning: %s%s: %s\n", prefix, lintText(issue.Path), lintText(issue.Error))
+		p.Printf("warning: %s%s: %s\n", prefix, safeText(issue.Path), safeText(issue.Error))
 	}
 }
 
@@ -169,8 +169,8 @@ func isTerminal(writer io.Writer) bool {
 	return term.IsTerminal(int(file.Fd()))
 }
 
-// lintText quotes control characters so untrusted paths and messages cannot alter a terminal.
-func lintText(s string) string {
+// safeText quotes control characters so untrusted paths and messages cannot alter a terminal.
+func safeText(s string) string {
 	if strings.IndexFunc(s, unicode.IsControl) >= 0 {
 		return strconv.QuoteToASCII(s)
 	}

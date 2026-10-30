@@ -134,25 +134,25 @@ func renderRules(out io.Writer, format string) error {
 	}
 	printer := newPrinter(out)
 	for _, rule := range policy.ListRules() {
-		printer.Printf("%s  %s\n  Why: %s\n  Fix: %s\n", lintText(rule.ID), lintText(rule.Name), lintText(rule.Description), lintText(rule.Fix))
+		printer.Printf("%s  %s\n  Why: %s\n  Fix: %s\n", safeText(rule.ID), safeText(rule.Name), safeText(rule.Description), safeText(rule.Fix))
 		var enabled []string
 		for profile, defaults := range rule.Defaults {
 			if defaults.Enabled {
-				enabled = append(enabled, lintText(profile)+" ("+lintText(string(defaults.Severity))+")")
+				enabled = append(enabled, safeText(profile)+" ("+safeText(string(defaults.Severity))+")")
 			}
 		}
 		slices.Sort(enabled)
 		printer.Printf("  Enabled profiles: %s\n", strings.Join(enabled, ", "))
 		printer.Println("  Docs:")
 		for _, reference := range rule.References {
-			printer.Printf("    %s\n", lintText(reference))
+			printer.Printf("    %s\n", safeText(reference))
 		}
 		printer.Println("  Exceptions:")
 		for _, exception := range rule.Exceptions {
-			printer.Printf("    %s\n", lintText(exception))
+			printer.Printf("    %s\n", safeText(exception))
 		}
 		if !rule.Available {
-			printer.Printf("  Unavailable: %s\n", lintText(rule.UnavailableReason))
+			printer.Printf("  Unavailable: %s\n", safeText(rule.UnavailableReason))
 		}
 		printer.Println()
 	}
@@ -164,14 +164,14 @@ func renderLint(out io.Writer, report policy.Report, format string, noColor bool
 		return encodeJSON(out, report)
 	}
 	printer := newPrinter(out)
-	printer.Printf("Lint | profile %s | ruleset %s\n", lintText(report.Profile), lintText(report.RulesetVersion))
+	printer.Printf("Lint | profile %s | ruleset %s\n", safeText(report.Profile), safeText(report.RulesetVersion))
 	imageTargets := make(map[string]bool, len(report.Targets))
 	for _, target := range report.Targets {
 		imageTargets[target.ID] = target.Kind == "oci-archive"
 		if verbose {
-			printer.Printf("Target: %s (%d prefixes)\n", lintText(target.ID), target.PrefixCount)
+			printer.Printf("Target: %s (%d prefixes)\n", safeText(target.ID), target.PrefixCount)
 			for _, root := range target.Roots {
-				printer.Printf("  Scope root: %s\n", lintText(root))
+				printer.Printf("  Scope root: %s\n", safeText(root))
 			}
 		}
 	}
@@ -186,22 +186,22 @@ func renderLint(out io.Writer, report policy.Report, format string, noColor bool
 			return errors.Join(printer.Err(), fmt.Errorf("render lint finding %q: rule metadata unavailable", finding.RuleID))
 		}
 		findings++
-		severity := colour(out, noColor, lintText(string(finding.Severity)), severityAttribute(finding.Severity))
-		printer.Printf("%s %s %s\n  Found: %s\n", lintText(finding.RuleID), severity, lintText(finding.Target), lintText(finding.Message))
+		severity := colour(out, noColor, safeText(string(finding.Severity)), severityAttribute(finding.Severity))
+		printer.Printf("%s %s %s\n  Found: %s\n", safeText(finding.RuleID), severity, safeText(finding.Target), safeText(finding.Message))
 		renderEvidence(printer, finding.Evidence, imageTargets[finding.Target])
 		for _, note := range finding.Evidence.Notes {
-			printer.Printf("  Note: %s\n", lintText(note))
+			printer.Printf("  Note: %s\n", safeText(note))
 		}
 		next := finding.Next
 		if next == "" {
 			next = rule.Fix
 		}
-		printer.Printf("  Next: %s\n", lintText(next))
+		printer.Printf("  Next: %s\n", safeText(next))
 	}
 	if verbose {
 		renderOutcomes(printer, report)
 	}
-	printer.Printf("Summary: %s; %d targets; %d findings; %d unknown", lintText(report.Status), len(report.Targets), findings, report.OutcomeCounts[policy.Unknown])
+	printer.Printf("Summary: %s; %d targets; %d findings; %d unknown", safeText(report.Status), len(report.Targets), findings, report.OutcomeCounts[policy.Unknown])
 	if suppressed > 0 {
 		printer.Printf("; %d suppressed", suppressed)
 	}
@@ -218,10 +218,10 @@ func renderLint(out io.Writer, report policy.Report, format string, noColor bool
 	}
 	if verbose {
 		for _, issue := range report.Issues {
-			printer.Printf("Inspection issue: %s: %s\n", lintText(issue.Path), lintText(issue.Message))
+			printer.Printf("Inspection issue: %s: %s\n", safeText(issue.Path), safeText(issue.Message))
 		}
 		for _, note := range report.SuppressionNotes {
-			printer.Printf("Suppression: %s %s: %s\n", lintText(note.Rule), lintText(note.Status), lintText(note.Reason))
+			printer.Printf("Suppression: %s %s: %s\n", safeText(note.Rule), safeText(note.Status), safeText(note.Reason))
 		}
 	}
 	return printer.Err()
@@ -248,7 +248,7 @@ func renderEvidence(printer *printer, ev policy.FindingEvidence, image bool) {
 			printer.Printf(" (%s)", lintBytes(item.Bytes))
 		}
 		if item.BlobDigest != "" {
-			printer.Printf("; source layer %d %s (%s compressed layer)", item.Layer+1, lintText(item.BlobDigest), lintBytes(item.LayerBytes))
+			printer.Printf("; source layer %d %s (%s compressed layer)", item.Layer+1, safeText(item.BlobDigest), lintBytes(item.LayerBytes))
 		}
 		printer.Println()
 	}
@@ -261,7 +261,7 @@ func renderEvidence(printer *printer, ev policy.FindingEvidence, image bool) {
 	}
 	if len(seen) == 0 {
 		for _, location := range ev.Locations {
-			printer.Printf("  Evidence: %s\n", lintText(location))
+			printer.Printf("  Evidence: %s\n", safeText(location))
 		}
 	}
 }
@@ -270,7 +270,7 @@ func lintPath(path string, image bool) string {
 	if image && !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	return lintText(path)
+	return safeText(path)
 }
 
 func lintBytes(bytes int64) string {
@@ -290,7 +290,7 @@ func lintBytes(bytes int64) string {
 func renderOutcomes(printer *printer, report policy.Report) {
 	for _, outcome := range report.Outcomes {
 		if outcome.Status == policy.Unknown {
-			printer.Printf("Check %s %s: %s\n", lintText(outcome.RuleID), lintText(string(outcome.Status)), lintText(outcome.Reason))
+			printer.Printf("Check %s %s: %s\n", safeText(outcome.RuleID), safeText(string(outcome.Status)), safeText(outcome.Reason))
 		}
 	}
 }

@@ -51,7 +51,7 @@ func renderImageText(cmd *cobra.Command, opts *commandOptions, report inventory.
 	if id.Variant != "" {
 		platform += "/" + id.Variant
 	}
-	out.Printf("Image evidence | %s\n  Source: %s\n  Input: %s\n  Manifest: %s\n  Config: %s\n  Platform: %s\n", report.Started.Format(time.RFC3339), lintText(id.Source), lintText(id.Input), id.ManifestDigest, id.ConfigDigest, platform)
+	out.Printf("Image evidence | %s\n  Source: %s\n  Input: %s\n  Manifest: %s\n  Config: %s\n  Platform: %s\n", report.Started.Format(time.RFC3339), safeText(id.Source), safeText(id.Input), id.ManifestDigest, id.ConfigDigest, platform)
 	out.Println("  Scope: final squashed image filesystem (not a running container)")
 	out.Println()
 	if err := out.Err(); err != nil {
@@ -59,7 +59,7 @@ func renderImageText(cmd *cobra.Command, opts *commandOptions, report inventory.
 	}
 	rows := make([][]string, 0, len(report.Environments))
 	for _, env := range report.Environments {
-		rows = append(rows, []string{lintText(env.Name), revisionCell(env.Revision, cmd.OutOrStdout(), opts.noColor), lintText(env.Path)})
+		rows = append(rows, []string{safeText(env.Name), revisionCell(env.Revision, cmd.OutOrStdout(), opts.noColor), safeText(env.Path)})
 	}
 	if err := printRows(cmd.OutOrStdout(), []string{"NAME", "REV", "IMAGE PREFIX"}, rows); err != nil {
 		return err
@@ -91,16 +91,16 @@ func renderImageText(cmd *cobra.Command, opts *commandOptions, report inventory.
 func renderImageSBOM(out *printer, report inventory.ImageReport) {
 	if result := report.Result; result != nil {
 		if result.PreExisting {
-			out.Printf("SBOM: pre-existing (not rescanned): %s\n", lintText(result.Path))
+			out.Printf("SBOM: pre-existing (not rescanned): %s\n", safeText(result.Path))
 		} else {
-			out.Printf("SBOM: %s\nSyft: %s; %d unique packages observed (%d conda, %d installed Python metadata, %d other); %d unknown file coordinates\n", lintText(result.Path), syftVersion(result.SyftVersion), result.Total, result.Conda, result.PythonInstalled, result.Other, result.Unknowns)
+			out.Printf("SBOM: %s\nSyft: %s; %d unique packages observed (%d conda, %d installed Python metadata, %d other); %d unknown file coordinates\n", safeText(result.Path), syftVersion(result.SyftVersion), result.Total, result.Conda, result.PythonInstalled, result.Other, result.Unknowns)
 		}
 		if report.ScanError != "" {
-			out.Printf("SBOM warning: %s\n", lintText(report.ScanError))
+			out.Printf("SBOM warning: %s\n", safeText(report.ScanError))
 		}
 		return
 	}
 	if report.ScanError != "" {
-		out.Printf("SBOM: not written (%s)\n", lintText(report.ScanError))
+		out.Printf("SBOM: not written (%s)\n", safeText(report.ScanError))
 	}
 }

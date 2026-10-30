@@ -94,7 +94,7 @@ func TestLintTextUsesInstanceNextAction(t *testing.T) {
 				want = rule.Fix
 			}
 			text := out.String()
-			if !strings.Contains(text, "Next: "+lintText(want)+"\n") || strings.Contains(text, "\x1b") || strings.Count(text, "  Next:") != 1 {
+			if !strings.Contains(text, "Next: "+safeText(want)+"\n") || strings.Contains(text, "\x1b") || strings.Count(text, "  Next:") != 1 {
 				t.Fatalf("instance next action was ignored or unsanitized: %q", text)
 			}
 			if test.next != "" && strings.Contains(text, rule.Fix) {
@@ -241,7 +241,7 @@ func TestLintTextEvidenceLocationFallback(t *testing.T) {
 	if err := printer.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if out.String() != "  Evidence: "+lintText(location)+"\n" {
+	if out.String() != "  Evidence: "+safeText(location)+"\n" {
 		t.Fatalf("location fallback lost sanitization: %q", out.String())
 	}
 }
