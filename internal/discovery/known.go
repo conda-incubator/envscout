@@ -92,17 +92,12 @@ func knownCandidates(inputs knownInputs, col *collector) []candidate {
 // and are probed directly; container hints contribute their immediate children. Nothing is
 // walked recursively, and no uv download or managed-Python directory is included.
 func venvCandidates(inputs knownInputs, col *collector) []candidate {
-	var out []candidate
-	for _, name := range []string{"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"} {
-		if value := inputs.env[name]; value != "" && validHintPath(name, value, col) {
-			out = append(out, newCandidate(name, value, kindPrefix, true))
-		}
-	}
-	for _, name := range []string{"WORKON_HOME", "POETRY_VIRTUALENVS_PATH"} {
-		if value := inputs.env[name]; value != "" && validHintPath(name, value, col) {
-			out = append(out, newCandidate(name, value, kindContainer, true))
-		}
-	}
+	out := configuredHints(inputs, []configuredHint{
+		{"VIRTUAL_ENV", kindPrefix, ""},
+		{"UV_PROJECT_ENVIRONMENT", kindPrefix, ""},
+		{"WORKON_HOME", kindContainer, ""},
+		{"POETRY_VIRTUALENVS_PATH", kindContainer, ""},
+	}, col)
 	if cache := inputs.env["POETRY_CACHE_DIR"]; cache != "" && validHintPath("POETRY_CACHE_DIR", cache, col) {
 		out = append(out, newCandidate("POETRY_CACHE_DIR", filepath.Join(cache, "virtualenvs"), kindContainer, true))
 	} else if cache := defaultPoetryCache(inputs); cache != "" {
@@ -156,6 +151,23 @@ func validHintPath(source, value string, col *collector) bool {
 	return false
 }
 
+type configuredHint struct {
+	name string
+	kind kind
+	tail string
+}
+
+// configuredHints preserves row order and validates raw values before adding suffixes.
+func configuredHints(inputs knownInputs, rows []configuredHint, col *collector) []candidate {
+	var out []candidate
+	for _, row := range rows {
+		if value := inputs.env[row.name]; value != "" && validHintPath(row.name, value, col) {
+			out = append(out, newCandidate(row.name, filepath.Join(value, row.tail), row.kind, true))
+		}
+	}
+	return out
+}
+
 // appendFixed appends the platform install layouts. Windows and unix rows never mix; the
 // unix-only home/opt rows are gated on goos, not on the host.
 func appendFixed(out []candidate, inputs knownInputs) []candidate {
@@ -199,23 +211,13 @@ func appendFixed(out []candidate, inputs knownInputs) []candidate {
 // missing, relative or too long is an issue; CONDA_ENVS_PATH is split on the injected
 // platform's separator and each entry is validated by the same rules as a scalar.
 func envHintCandidates(inputs knownInputs, col *collector) []candidate {
-	var out []candidate
-	scalars := []struct {
-		name string
-		kind kind
-		tail string
-	}{
+	out := configuredHints(inputs, []configuredHint{
 		{"CONDA_PREFIX", kindPrefix, ""},
 		{"CONDA_ROOT", kindRoot, ""},
 		{"MAMBA_ROOT_PREFIX", kindRoot, ""},
 		{"PIXI_HOME", kindContainer, "envs"},
 		{"PIXI_PROJECT_ROOT", kindContainer, filepath.Join(".pixi", "envs")},
-	}
-	for _, s := range scalars {
-		if value := inputs.env[s.name]; value != "" && validHintPath(s.name, value, col) {
-			out = append(out, newCandidate(s.name, filepath.Join(value, s.tail), s.kind, true))
-		}
-	}
+	}, col)
 	raw := inputs.env["CONDA_ENVS_PATH"]
 	if len(raw) > maxPathListBytes {
 		col.addIssue("CONDA_ENVS_PATH", fmt.Errorf("path list exceeds known-location size limit"))
