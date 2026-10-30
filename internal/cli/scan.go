@@ -61,32 +61,32 @@ func renderScanText(cmd *cobra.Command, report inventory.ScanReport) error {
 	for _, observation := range report.Observations {
 		env := observation.Environment
 		if env.Kind == discovery.KindVenv {
-			out.Printf("%s  (venv)\n", lintText(env.Name))
+			out.Printf("%s  (venv)\n", safeText(env.Name))
 		} else {
-			out.Printf("%s  (revision %s)\n", lintText(env.Name), formatRevision(env.Revision))
+			out.Printf("%s  (revision %s)\n", safeText(env.Name), formatRevision(env.Revision))
 		}
-		out.Printf("  Prefix: %s\n  Duration: %s\n", lintText(env.Path), observation.Duration.Round(time.Millisecond))
+		out.Printf("  Prefix: %s\n  Duration: %s\n", safeText(env.Path), observation.Duration.Round(time.Millisecond))
 		if observation.Result.PreExisting {
 			preExisting++
-			out.Printf("  SBOM: pre-existing (not rescanned): %s\n\n", lintText(observation.Result.Path))
+			out.Printf("  SBOM: pre-existing (not rescanned): %s\n\n", safeText(observation.Result.Path))
 			continue
 		}
 		if observation.Error != "" {
 			failures++
-			out.Printf("  SBOM: not written (%s)\n\n", lintText(observation.Error))
+			out.Printf("  SBOM: not written (%s)\n\n", safeText(observation.Error))
 			continue
 		}
 		written++
 		result := observation.Result
-		out.Printf("  Syft: %s; directory source; %d conda, %d installed Python metadata, %d other packages observed\n  SBOM: %s\n", syftVersion(result.SyftVersion), result.Conda, result.PythonInstalled, result.Other, lintText(result.Path))
+		out.Printf("  Syft: %s; directory source; %d conda, %d installed Python metadata, %d other packages observed\n  SBOM: %s\n", syftVersion(result.SyftVersion), result.Conda, result.PythonInstalled, result.Other, safeText(result.Path))
 		if observation.Pixi != "" {
-			out.Printf("  %s\n", lintText(observation.Pixi))
+			out.Printf("  %s\n", safeText(observation.Pixi))
 		}
 		out.Println()
 	}
 	out.Println("Searched roots:")
 	for _, root := range report.Discovery.Roots {
-		out.Printf("  %s\n", lintText(root))
+		out.Printf("  %s\n", safeText(root))
 	}
 	environments := len(report.Discovery.Environments)
 	out.Printf("Summary: %s; %d environments found, %d SBOMs written, %d pre-existing SBOMs, %d failed scans, %d discovery issues\n", report.Status, environments, written, preExisting, failures, len(report.Discovery.Issues))

@@ -163,7 +163,7 @@ func renderFindText(cmd *cobra.Command, opts *commandOptions, report discovery.R
 		if env.Kind == discovery.KindVenv {
 			revision = "-"
 		}
-		rows = append(rows, []string{lintText(env.Name), lintText(env.Kind), revision, lintText(env.Path)})
+		rows = append(rows, []string{safeText(env.Name), safeText(env.Kind), revision, safeText(env.Path)})
 	}
 	if err := printRows(cmd.OutOrStdout(), []string{"NAME", "TYPE", "REV", "LOCATION"}, rows); err != nil {
 		return err
