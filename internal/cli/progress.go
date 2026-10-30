@@ -29,11 +29,11 @@ var spinnerFrames = []string{"|", "/", "-", "\\"}
 // enabled and out is an interactive terminal. Otherwise it returns ctx unchanged
 // and a no-op close, so callers never branch on the result.
 func startDiscoveryProgress(ctx context.Context, out io.Writer, enabled bool) (context.Context, func() error) {
-	if !progressEnabled(ctx, out, enabled) {
+	cfg, ok := terminalProgressConfig(ctx, out, enabled)
+	if !ok {
 		return ctx, func() error { return nil }
 	}
-	ticker := time.NewTicker(progressInterval)
-	ctx, _, closeFn := startProgress(ctx, out, terminalWidth(out), ticker.C, ticker.Stop)
+	ctx, _, closeFn := startProgress(ctx, out, cfg.width, cfg.tick, cfg.stopTicker)
 	return ctx, closeFn
 }
 
@@ -57,26 +57,20 @@ func startProgress(ctx context.Context, out io.Writer, width int, tick <-chan ti
 // startScanProgress is the scan-command entry point. It uses the same gate as
 // startDiscoveryProgress and switches to SBOM counters once the domain starts.
 func startScanProgress(ctx context.Context, out io.Writer, enabled bool) (context.Context, func() error) {
-	if !progressEnabled(ctx, out, enabled) {
+	cfg, ok := terminalProgressConfig(ctx, out, enabled)
+	if !ok {
 		return ctx, func() error { return nil }
 	}
-	ticker := time.NewTicker(progressInterval)
-	ctx, _, _, closeFn := startScanProgressCore(ctx, out, scanCoreConfig{
-		width:      terminalWidth(out),
-		enabled:    true,
-		tick:       ticker.C,
-		stopTicker: ticker.Stop,
-		now:        time.Now,
-	})
+	ctx, _, _, closeFn := startScanProgressCore(ctx, out, cfg)
 	return ctx, closeFn
 }
 
 func startLintProgress(ctx context.Context, out io.Writer, enabled bool) (context.Context, func() error) {
-	if !progressEnabled(ctx, out, enabled) {
+	cfg, ok := terminalProgressConfig(ctx, out, enabled)
+	if !ok {
 		return ctx, func() error { return nil }
 	}
-	ticker := time.NewTicker(progressInterval)
-	ctx, _, _, closeFn := startLintProgressCore(ctx, out, scanCoreConfig{width: terminalWidth(out), enabled: true, tick: ticker.C, stopTicker: ticker.Stop, now: time.Now})
+	ctx, _, _, closeFn := startLintProgressCore(ctx, out, cfg)
 	return ctx, closeFn
 }
 
@@ -104,6 +98,21 @@ func startLintProgressCore(ctx context.Context, out io.Writer, cfg scanCoreConfi
 // interactive terminal, and TERM not dumb.
 func progressEnabled(ctx context.Context, out io.Writer, enabled bool) bool {
 	return enabled && ctx.Err() == nil && isTerminal(out) && os.Getenv("TERM") != "dumb"
+}
+
+// Only enabled configs allocate a ticker; the receiving core owns its cleanup.
+func terminalProgressConfig(ctx context.Context, out io.Writer, enabled bool) (scanCoreConfig, bool) {
+	if !progressEnabled(ctx, out, enabled) {
+		return scanCoreConfig{}, false
+	}
+	ticker := time.NewTicker(progressInterval)
+	return scanCoreConfig{
+		width:      terminalWidth(out),
+		enabled:    true,
+		tick:       ticker.C,
+		stopTicker: ticker.Stop,
+		now:        time.Now,
+	}, true
 }
 
 // scanCoreConfig injects the clock, tick source, and width so tests run without sleeps.
