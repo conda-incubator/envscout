@@ -93,28 +93,17 @@ func knownCandidates(inputs knownInputs, col *collector) []candidate {
 // walked recursively, and no uv download or managed-Python directory is included.
 func venvCandidates(inputs knownInputs, col *collector) []candidate {
 	var out []candidate
-	absolute := func(source, value string) bool {
-		switch {
-		case len(value) > maxHintPathBytes:
-			col.addIssue(source, fmt.Errorf("hint path exceeds known-location limit"))
-		case !filepath.IsAbs(value):
-			col.addIssue(source, fmt.Errorf("hint must be an absolute path"))
-		default:
-			return true
-		}
-		return false
-	}
 	for _, name := range []string{"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"} {
-		if value := inputs.env[name]; value != "" && absolute(name, value) {
+		if value := inputs.env[name]; value != "" && validHintPath(name, value, col) {
 			out = append(out, newCandidate(name, value, kindPrefix, true))
 		}
 	}
 	for _, name := range []string{"WORKON_HOME", "POETRY_VIRTUALENVS_PATH"} {
-		if value := inputs.env[name]; value != "" && absolute(name, value) {
+		if value := inputs.env[name]; value != "" && validHintPath(name, value, col) {
 			out = append(out, newCandidate(name, value, kindContainer, true))
 		}
 	}
-	if cache := inputs.env["POETRY_CACHE_DIR"]; cache != "" && absolute("POETRY_CACHE_DIR", cache) {
+	if cache := inputs.env["POETRY_CACHE_DIR"]; cache != "" && validHintPath("POETRY_CACHE_DIR", cache, col) {
 		out = append(out, newCandidate("POETRY_CACHE_DIR", filepath.Join(cache, "virtualenvs"), kindContainer, true))
 	} else if cache := defaultPoetryCache(inputs); cache != "" {
 		out = append(out, newCandidate("poetry/cache", cache, kindContainer, false))
@@ -152,6 +141,19 @@ func defaultPoetryCache(inputs knownInputs) string {
 
 func newCandidate(source, p string, k kind, configured bool) candidate {
 	return candidate{source: source, path: filepath.Clean(p), kind: k, configured: configured}
+}
+
+// validHintPath checks configured hints before cleaning or adding layout suffixes.
+func validHintPath(source, value string, col *collector) bool {
+	switch {
+	case len(value) > maxHintPathBytes:
+		col.addIssue(source, fmt.Errorf("hint path exceeds known-location limit"))
+	case !filepath.IsAbs(value):
+		col.addIssue(source, fmt.Errorf("hint must be an absolute path"))
+	default:
+		return true
+	}
+	return false
 }
 
 // appendFixed appends the platform install layouts. Windows and unix rows never mix; the
@@ -198,17 +200,6 @@ func appendFixed(out []candidate, inputs knownInputs) []candidate {
 // platform's separator and each entry is validated by the same rules as a scalar.
 func envHintCandidates(inputs knownInputs, col *collector) []candidate {
 	var out []candidate
-	usable := func(source, value string) bool {
-		switch {
-		case len(value) > maxHintPathBytes:
-			col.addIssue(source, fmt.Errorf("hint path exceeds known-location limit"))
-		case !filepath.IsAbs(value):
-			col.addIssue(source, fmt.Errorf("hint must be an absolute path"))
-		default:
-			return true
-		}
-		return false
-	}
 	scalars := []struct {
 		name string
 		kind kind
@@ -221,7 +212,7 @@ func envHintCandidates(inputs knownInputs, col *collector) []candidate {
 		{"PIXI_PROJECT_ROOT", kindContainer, filepath.Join(".pixi", "envs")},
 	}
 	for _, s := range scalars {
-		if value := inputs.env[s.name]; value != "" && usable(s.name, value) {
+		if value := inputs.env[s.name]; value != "" && validHintPath(s.name, value, col) {
 			out = append(out, newCandidate(s.name, filepath.Join(value, s.tail), s.kind, true))
 		}
 	}
@@ -231,7 +222,7 @@ func envHintCandidates(inputs knownInputs, col *collector) []candidate {
 		return out
 	}
 	for _, entry := range strings.Split(raw, inputs.pathSep()) {
-		if entry != "" && usable("CONDA_ENVS_PATH", entry) {
+		if entry != "" && validHintPath("CONDA_ENVS_PATH", entry, col) {
 			out = append(out, newCandidate("CONDA_ENVS_PATH", entry, kindContainer, true))
 		}
 	}
