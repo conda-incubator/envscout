@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -212,10 +211,10 @@ func printRows(out io.Writer, header []string, rows [][]string) error {
 
 // revisionCell formats a revision for an ANSI-aware table.
 func revisionCell(revision *int, writer io.Writer, noColor bool) string {
+	text := formatRevision(revision)
 	if revision == nil {
-		return "?"
+		return text
 	}
-	text := strconv.Itoa(*revision)
 	return colour(writer, noColor, text, revisionAttribute(*revision))
 }
 
