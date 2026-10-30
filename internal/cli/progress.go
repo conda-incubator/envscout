@@ -49,7 +49,7 @@ func startProgress(ctx context.Context, out io.Writer, width int, tick <-chan ti
 	counts := &discovery.Progress{}
 	ctx = discovery.WithProgress(ctx, counts)
 	line := func(int) string {
-		return fmt.Sprintf("Folders scanned: %d | Environments found: %d", counts.Folders.Load(), counts.Environments.Load())
+		return discoveryLine(counts)
 	}
 	return ctx, counts, runProgressLoop(ctx, out, width, tick, stopTicker, line)
 }
@@ -93,7 +93,7 @@ func startLintProgressCore(ctx context.Context, out io.Writer, cfg scanCoreConfi
 	ctx = evidence.WithProgress(ctx, inspectionCounts)
 	line := func(ticks int) string {
 		if !inspectionCounts.Started.Load() {
-			return fmt.Sprintf("Folders scanned: %d | Environments found: %d", discoveryCounts.Folders.Load(), discoveryCounts.Environments.Load())
+			return discoveryLine(discoveryCounts)
 		}
 		return lintLine(inspectionCounts, cfg.now(), spinnerFrames[(ticks-1)%len(spinnerFrames)])
 	}
@@ -132,7 +132,7 @@ func startScanProgressCore(ctx context.Context, out io.Writer, cfg scanCoreConfi
 
 	line := func(ticks int) string {
 		if !sbomCounts.Started.Load() {
-			return fmt.Sprintf("Folders scanned: %d | Environments found: %d", discoveryCounts.Folders.Load(), discoveryCounts.Environments.Load())
+			return discoveryLine(discoveryCounts)
 		}
 		return sbomLine(sbomCounts, cfg.now(), spinnerFrames[(ticks-1)%len(spinnerFrames)])
 	}
@@ -187,6 +187,10 @@ func runProgressLoop(ctx context.Context, out io.Writer, width int, tick <-chan 
 		})
 		return closeErr
 	}
+}
+
+func discoveryLine(counts *discovery.Progress) string {
+	return fmt.Sprintf("Folders scanned: %d | Environments found: %d", counts.Folders.Load(), counts.Environments.Load())
 }
 
 // sbomLine estimates remaining time from actual new scans, never fast skips.
