@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -180,6 +181,74 @@ func TestFindExplicitRootIsNeverPruned(t *testing.T) {
 	}
 	if len(report.Environments) != 1 || report.Environments[0].Path != filepath.Join(site, "nested") {
 		t.Fatalf("explicit site-packages root was pruned: %+v", report.Environments)
+	}
+}
+
+func TestFindPrunesMacOSCloudDirectories(t *testing.T) {
+	home := knownTempDir(t)
+	t.Setenv("HOME", home)
+	cloudEnvs := []string{
+		filepath.Join(home, "Library", "CloudStorage", "Provider", "env"),
+		filepath.Join(home, "Library", "Mobile Documents", "com~apple~CloudDocs", "env"),
+	}
+	keptEnvs := []string{
+		filepath.Join(home, "Library", "Caches", "env"),
+		filepath.Join(home, "Library", "CloudStorage-local", "env"),
+		filepath.Join(home, "code", "CloudStorage", "env"),
+		filepath.Join(home, "code", "Library", "CloudStorage", "env"),
+		filepath.Join(home, "code", "Library", "Mobile Documents", "env"),
+	}
+	for _, env := range append(cloudEnvs, keptEnvs...) {
+		makePrefix(t, env)
+	}
+	report, err := Find(context.Background(), []string{home}, false)
+	if err != nil || len(report.Issues) != 0 {
+		t.Fatalf("find = %+v, %v", report, err)
+	}
+	paths := envPaths(report)
+	for _, env := range keptEnvs {
+		if !paths[env] {
+			t.Errorf("ordinary folder was pruned: %s", env)
+		}
+	}
+	for _, env := range cloudEnvs {
+		if got, want := paths[env], runtime.GOOS != "darwin"; got != want {
+			t.Errorf("cloud environment found = %t, want %t: %s", got, want, env)
+		}
+	}
+}
+
+func TestFindCloudExplicitRootsOverrideParentPrune(t *testing.T) {
+	home := knownTempDir(t)
+	t.Setenv("HOME", home)
+	for _, name := range []string{"CloudStorage", "Mobile Documents"} {
+		cloud := filepath.Join(home, "Library", name)
+		env := filepath.Join(cloud, "Provider", "env")
+		makePrefix(t, env)
+		for _, explicit := range []string{cloud, filepath.Dir(env)} {
+			report, err := Find(context.Background(), []string{home, explicit}, false)
+			if err != nil || len(report.Issues) != 0 || !envPaths(report)[env] {
+				t.Fatalf("explicit cloud root %s was pruned: %+v, %v", explicit, report, err)
+			}
+		}
+	}
+}
+
+func TestFindCloudDirectoriesPrunedBeforeEnumeration(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS cloud directory pruning")
+	}
+	home := knownTempDir(t)
+	t.Setenv("HOME", home)
+	library := filepath.Join(home, "Library")
+	for _, name := range []string{"CloudStorage", "Mobile Documents"} {
+		makePrefix(t, filepath.Join(library, name, "Provider", "env"))
+	}
+	var p Progress
+	report, err := Find(WithProgress(context.Background(), &p), []string{library}, false)
+	// Only Library and the two pruned entries are examined; no children are opened.
+	if err != nil || len(report.Issues) != 0 || len(report.Environments) != 0 || p.Folders.Load() != 3 {
+		t.Fatalf("cloud trees were traversed: report=%+v folders=%d err=%v", report, p.Folders.Load(), err)
 	}
 }
 
