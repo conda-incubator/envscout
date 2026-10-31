@@ -36,6 +36,8 @@ Local `find` and `scan` recognize conda prefixes and virtualenvs with a `pyvenv.
 
 Explicit-root searches do not follow symlinks or cross filesystem-device boundaries. They skip `.git`, `node_modules`, `__pycache__`, `site-packages`, and conda package caches unless those paths are supplied as roots. Scans run offline and retain successful SBOMs when other environments cannot be inspected.
 
+On macOS, recursive discovery also skips the current user's `~/Library/CloudStorage` (File Provider services such as Google Drive, OneDrive and Dropbox) and `~/Library/Mobile Documents` (iCloud). Listing cloud directories can fetch remote metadata and block traversal, even without reading file contents. Supply a cloud directory or a folder inside it as an explicit root to opt in. This is location-based pruning, not detection of every cloud-backed folder; custom provider locations and cloud-synced Desktop/Documents folders may still need `--exclude`.
+
 All three commands accept repeatable folder globs, for example `./envscout lint --rule ENV013 --exclude '.cache' --exclude '**/build' ~/`. Quote patterns; bare names match at any depth, `/` patterns are search-root relative (current directory for no-root `find`, `/` for images), and absolute paths also work. Matches are case-sensitive and skip entire subtrees, including explicit roots.
 
 Exclusions apply only to discovery, not package files inside selected environments or whole-image SBOMs/image-wide lint evidence.

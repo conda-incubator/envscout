@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -161,11 +162,19 @@ func walkRoot(ctx context.Context, root string, roots []string, col *collector, 
 	})
 }
 
-// pruneDirectory reports whether a directory is excluded by name or by system path.
+// pruneDirectory reports whether a directory is excluded by name or by location.
 // Callers never apply it to an explicit root.
 func pruneDirectory(path, name string) bool {
 	if prunedNames[name] {
 		return true
+	}
+	if runtime.GOOS == "darwin" && (name == "CloudStorage" || name == "Mobile Documents") {
+		// Prune standard cloud trees before readdir can materialize their contents.
+		// Dataless flags alone miss cached folders with cloud-only descendants.
+		home, err := os.UserHomeDir()
+		if err == nil && filepath.IsAbs(home) && filepath.Dir(path) == filepath.Join(home, "Library") {
+			return true
+		}
 	}
 	for _, sys := range systemPaths {
 		if path == sys || strings.HasPrefix(path, sys+string(filepath.Separator)) {
