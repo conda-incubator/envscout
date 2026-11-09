@@ -142,6 +142,15 @@ func (t *Target) markCollectedPartial() {
 	}
 }
 
+func (t *Target) initCoverage(req Request, capabilities []string) {
+	for _, capability := range capabilities {
+		t.Coverage[capability] = NotCollected
+		if Requested(req, capability) {
+			t.Coverage[capability] = Complete
+		}
+	}
+}
+
 func Requested(r Request, capability string) bool {
 	for _, c := range r.Capabilities {
 		if c == capability {

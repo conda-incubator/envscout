@@ -191,12 +191,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		if Requested(targetReq, "project-association") {
 			target.Coverage["project-association"] = Complete
 		}
-		for _, capability := range []string{"conda-records", "python-distributions", "host-cache", "installed-lock"} {
-			target.Coverage[capability] = NotCollected
-			if Requested(targetReq, capability) {
-				target.Coverage[capability] = Complete
-			}
-		}
+		target.initCoverage(targetReq, []string{"conda-records", "python-distributions", "host-cache", "installed-lock"})
 		if Requested(targetReq, "conda-records") {
 			target.Coverage["conda-records"] = target.Prefixes[0].RecordCoverage
 		}

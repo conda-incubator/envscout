@@ -60,12 +60,7 @@ type prefixRecords struct {
 // is kept.
 func CollectImage(ctx context.Context, loaded *imageinput.Loaded, req Request) (target Target, err error) {
 	target = Target{Kind: "oci-archive", Roots: []string{}, Prefixes: []Prefix{}, Archives: []Artifact{}, Extracted: []Artifact{}, Tools: []Artifact{}, Shells: []Artifact{}, Retained: []Artifact{}, Coverage: map[string]string{}, Issues: []Issue{}}
-	for _, capability := range imageCapabilities {
-		target.Coverage[capability] = NotCollected
-		if Requested(req, capability) {
-			target.Coverage[capability] = Complete
-		}
-	}
+	target.initCoverage(req, imageCapabilities)
 	if err := ctx.Err(); err != nil {
 		return target, err
 	}
