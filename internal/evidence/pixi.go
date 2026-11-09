@@ -44,8 +44,7 @@ func validatePixiLock(data []byte) error {
 	return err
 }
 
-func collectHostPixi(ctx context.Context, target *Target, req Request) {
-	prefix := target.Prefixes[0]
+func collectHostPixi(ctx context.Context, target *Target, prefix Prefix, req Request) {
 	root, err := os.OpenRoot(prefix.Path)
 	if err != nil {
 		if Requested(req, "installed-lock") {

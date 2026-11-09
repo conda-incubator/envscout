@@ -34,7 +34,7 @@ func TestCoverageContractHostFactsCancellation(t *testing.T) {
 		if canceled {
 			want.Coverage = map[string]string{"prefixes": Partial, "conda-records": Partial, "host-cache": NotCollected, "empty": Partial, "unknown": Partial}
 		}
-		err := collectHostFacts(ctx, &target, Request{}, nil)
+		err := (hostEnvironment{target: &target}).collectFacts(ctx, nil)
 		cancel()
 		if (canceled && !errors.Is(err, context.Canceled)) || (!canceled && err != nil) || !reflect.DeepEqual(target, want) {
 			t.Fatalf("canceled=%t: target=%+v error=%v, want %+v", canceled, target, err, want)
@@ -44,7 +44,7 @@ func TestCoverageContractHostFactsCancellation(t *testing.T) {
 	cancel()
 	for _, coverage := range []map[string]string{nil, {}} {
 		target := Target{Coverage: coverage}
-		if !errors.Is(collectHostFacts(ctx, &target, Request{}, nil), context.Canceled) ||
+		if !errors.Is((hostEnvironment{target: &target}).collectFacts(ctx, nil), context.Canceled) ||
 			len(target.Coverage) != 0 || (target.Coverage == nil) != (coverage == nil) {
 			t.Fatalf("empty coverage changed shape: %+v", target.Coverage)
 		}
