@@ -236,11 +236,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 	for i := range snapshot.Targets {
 		target := &snapshot.Targets[i]
 		if cancelErr != nil || ctx.Err() != nil {
-			for capability, state := range target.Coverage {
-				if state != NotCollected {
-					target.Coverage[capability] = Partial
-				}
-			}
+			target.markCollectedPartial()
 			continue
 		}
 		start := time.Now()

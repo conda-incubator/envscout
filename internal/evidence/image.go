@@ -104,11 +104,7 @@ func (c *imageCollector) cancelled(ctx context.Context) error {
 	if cause == nil {
 		return nil
 	}
-	for capability, coverage := range c.target.Coverage {
-		if coverage != NotCollected {
-			c.target.Coverage[capability] = Partial
-		}
-	}
+	c.target.markCollectedPartial()
 	for i := range c.target.Prefixes {
 		c.target.Prefixes[i].RecordCoverage = Partial
 	}

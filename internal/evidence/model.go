@@ -134,6 +134,14 @@ func (t Target) IsVirtualenv() bool {
 	return t.Kind == "dir" && len(t.Prefixes) == 1 && t.Prefixes[0].Kind == discovery.KindVenv
 }
 
+func (t *Target) markCollectedPartial() {
+	for capability, state := range t.Coverage {
+		if state != NotCollected {
+			t.Coverage[capability] = Partial
+		}
+	}
+}
+
 func Requested(r Request, capability string) bool {
 	for _, c := range r.Capabilities {
 		if c == capability {

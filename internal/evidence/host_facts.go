@@ -47,11 +47,7 @@ func collectHostFacts(ctx context.Context, target *Target, req Request, caches m
 		collectHostPixi(ctx, target, req)
 	}
 	if err := ctx.Err(); err != nil {
-		for capability, state := range target.Coverage {
-			if state != NotCollected {
-				target.Coverage[capability] = Partial
-			}
-		}
+		target.markCollectedPartial()
 		return err
 	}
 	return nil
