@@ -85,13 +85,19 @@ func startLintProgressCore(ctx context.Context, out io.Writer, cfg scanCoreConfi
 	inspectionCounts := &evidence.Progress{}
 	ctx = discovery.WithProgress(ctx, discoveryCounts)
 	ctx = evidence.WithProgress(ctx, inspectionCounts)
+	if cfg.osc != nil {
+		cfg.osc.ctx = ctx
+	}
+	update := func(p *printer) {
+		cfg.osc.update(p, inspectionCounts.Started.Load(), inspectionCounts.Finished.Load(), inspectionCounts.Total.Load())
+	}
 	line := func(ticks int) string {
 		if !inspectionCounts.Started.Load() {
 			return discoveryLine(discoveryCounts)
 		}
 		return lintLine(inspectionCounts, cfg.now(), spinnerFrames[(ticks-1)%len(spinnerFrames)])
 	}
-	return ctx, discoveryCounts, inspectionCounts, runProgressLoop(ctx, out, cfg.width, cfg.tick, cfg.stopTicker, line)
+	return ctx, discoveryCounts, inspectionCounts, runProgressLoop(ctx, out, cfg.width, cfg.tick, cfg.stopTicker, line, update)
 }
 
 // progressEnabled is the shared gate: enabled by the caller, not canceled, an
@@ -112,6 +118,7 @@ func terminalProgressConfig(ctx context.Context, out io.Writer, enabled bool) (s
 		tick:       ticker.C,
 		stopTicker: ticker.Stop,
 		now:        time.Now,
+		osc:        oscFrom(ctx),
 	}, true
 }
 
@@ -122,6 +129,7 @@ type scanCoreConfig struct {
 	tick       <-chan time.Time
 	stopTicker func()
 	now        func() time.Time
+	osc        *oscProgress
 }
 
 // startScanProgressCore attaches discovery and inventory counters to ctx and renders
@@ -138,6 +146,12 @@ func startScanProgressCore(ctx context.Context, out io.Writer, cfg scanCoreConfi
 	sbomCounts := &inventory.Progress{}
 	ctx = discovery.WithProgress(ctx, discoveryCounts)
 	ctx = inventory.WithProgress(ctx, sbomCounts)
+	if cfg.osc != nil {
+		cfg.osc.ctx = ctx
+	}
+	update := func(p *printer) {
+		cfg.osc.update(p, sbomCounts.Started.Load(), sbomCounts.Finished.Load(), sbomCounts.Total.Load())
+	}
 
 	line := func(ticks int) string {
 		if !sbomCounts.Started.Load() {
@@ -145,13 +159,13 @@ func startScanProgressCore(ctx context.Context, out io.Writer, cfg scanCoreConfi
 		}
 		return sbomLine(sbomCounts, cfg.now(), spinnerFrames[(ticks-1)%len(spinnerFrames)])
 	}
-	return ctx, discoveryCounts, sbomCounts, runProgressLoop(ctx, out, cfg.width, cfg.tick, cfg.stopTicker, line)
+	return ctx, discoveryCounts, sbomCounts, runProgressLoop(ctx, out, cfg.width, cfg.tick, cfg.stopTicker, line, update)
 }
 
 // runProgressLoop owns the single renderer goroutine and the idempotent close. line
 // receives the 1-based tick count. Identical text is not redrawn, so the phased line
 // must change text on every tick through its spinner.
-func runProgressLoop(ctx context.Context, out io.Writer, width int, tick <-chan time.Time, stopTicker func(), line func(ticks int) string) func() error {
+func runProgressLoop(ctx context.Context, out io.Writer, width int, tick <-chan time.Time, stopTicker func(), line func(ticks int) string, updates ...func(*printer)) func() error {
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	printer := newPrinter(out)
@@ -170,6 +184,9 @@ func runProgressLoop(ctx context.Context, out io.Writer, width int, tick <-chan 
 					return
 				}
 				ticks++
+				for _, update := range updates {
+					update(printer)
+				}
 				text := line(ticks)
 				if text == last {
 					continue
@@ -190,6 +207,10 @@ func runProgressLoop(ctx context.Context, out io.Writer, width int, tick <-chan 
 			stopTicker()
 			close(stop)
 			<-done
+			// Sample fast operations that completed without a renderer tick.
+			for _, update := range updates {
+				update(printer)
+			}
 			// The goroutine has stopped, so clearing cannot race a redraw.
 			printer.write(progressClear)
 			closeErr = printer.Err()
@@ -244,8 +265,13 @@ func terminalWidth(out io.Writer) int {
 	if !ok {
 		return 0
 	}
-	width, _, err := term.GetSize(int(file.Fd()))
+	raw, err := file.SyscallConn()
 	if err != nil {
+		return 0
+	}
+	var width int
+	controlErr := raw.Control(func(fd uintptr) { width, _, err = term.GetSize(int(fd)) })
+	if controlErr != nil || err != nil {
 		return 0
 	}
 	return width

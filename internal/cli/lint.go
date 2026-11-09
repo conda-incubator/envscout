@@ -85,7 +85,8 @@ func lintOutput(err error) error {
 	return inputError(fmt.Errorf("write lint output: %w", err))
 }
 
-func runLint(cmd *cobra.Command, opts *commandOptions, flags *lintFlags, inputs []string) error {
+func runLint(cmd *cobra.Command, opts *commandOptions, flags *lintFlags, inputs []string) (result error) {
+	defer func() { result = errors.Join(result, lintOutput(oscFrom(cmd.Context()).finish(result))) }()
 	if flags.list {
 		return lintOutput(renderRules(cmd.OutOrStdout(), opts.format))
 	}
