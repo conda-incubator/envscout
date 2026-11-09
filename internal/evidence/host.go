@@ -80,6 +80,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		snapshot.Inspection.AccessErrors++
 	}
 	progress := progressFrom(ctx)
+	recorder := inspectionRecorder{summary: snapshot.Inspection, progress: progress}
 	if progress != nil {
 		progress.Total.Store(uint64(len(report.Environments)))
 		progress.Started.Store(true)
@@ -112,8 +113,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		if env.Kind == discovery.KindVenv {
 			if len(req.VirtualenvCapabilities) == 0 {
 				snapshot.Issues = append(snapshot.Issues, Issue{Capability: "evaluation", Path: env.Path, Message: "virtualenv lint is not supported by the selected rules; use find or scan"})
-				snapshot.Inspection.Failed++
-				progress.finish(true, 0)
+				recorder.finish(true, time.Time{})
 			} else {
 				validated = append(validated, Target{ID: FileID(env.Path), Kind: "dir", Input: env.Path, Roots: report.Roots,
 					Prefixes: []Prefix{{Kind: env.Kind, Path: env.Path, RecordCoverage: NotCollected}}, Coverage: map[string]string{}, Issues: []Issue{}})
@@ -121,15 +121,9 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			continue
 		}
 		start := time.Now()
-		if progress != nil {
-			progress.ActiveStarted.Store(start.UnixNano())
-			progress.Active.Store(1)
-		}
+		recorder.begin(start)
 		records, err := condaRecordsForPrefix(ctx, env.Path)
-		if progress != nil {
-			progress.Active.Store(0)
-			progress.ActiveStarted.Store(0)
-		}
+		recorder.end()
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			cancelErr = ctxErr
 		}
@@ -139,8 +133,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		}
 		if len(records) == 0 {
 			if cancelErr == nil {
-				snapshot.Inspection.Failed++
-				progress.finish(true, 0)
+				recorder.finish(true, time.Time{})
 			}
 			if err == nil {
 				snapshot.Issues = append(snapshot.Issues, Issue{Capability: "prefixes", Path: env.Path, Message: "no valid conda package metadata; prefix not counted"})
@@ -227,8 +220,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			if err != nil {
 				snapshot.Inspection.AccessErrors += accessErrorCount(err)
 				if ctx.Err() == nil {
-					snapshot.Inspection.Failed++
-					progress.finish(true, 0)
+					recorder.finish(true, time.Time{})
 				}
 				return snapshot, err
 			}
@@ -252,18 +244,12 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			continue
 		}
 		start := time.Now()
-		if progress != nil {
-			progress.ActiveStarted.Store(start.UnixNano())
-			progress.Active.Store(1)
-		}
+		recorder.begin(start)
 		if err := collectHostFacts(ctx, target, req.ForEnvironment(target.Prefixes[0].Kind), caches); err != nil {
 			cancelErr = errors.Join(cancelErr, err)
 		}
 		if ctx.Err() != nil {
-			if progress != nil {
-				progress.Active.Store(0)
-				progress.ActiveStarted.Store(0)
-			}
+			recorder.end()
 			continue
 		}
 		failed := len(target.Issues) != 0 || target.Prefixes[0].RecordCoverage == Partial
@@ -272,12 +258,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 				failed = true
 			}
 		}
-		if failed {
-			snapshot.Inspection.Failed++
-		} else {
-			snapshot.Inspection.Inspected++
-		}
-		progress.finish(failed, time.Since(start))
+		recorder.finish(failed, start)
 	}
 	if len(snapshot.Targets) == 0 && len(report.Roots) > 0 {
 		snapshot.Targets = append(snapshot.Targets, Target{ID: FileID(report.Roots[0]), Kind: "dir", Input: report.Roots[0], Roots: report.Roots,
