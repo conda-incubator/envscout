@@ -27,6 +27,14 @@ func FileID(filename string) string {
 	return (&url.URL{Scheme: "file", Path: filename}).String()
 }
 
+// target points into the final validated slice; do not append while a view is in use.
+// Prefix facts are immutable after validation.
+type hostEnvironment struct {
+	target  *Target
+	prefix  Prefix
+	request Request
+}
+
 // CollectHost requires explicit roots and never invokes an external tool.
 // Without requested collectors it only lists the root targets. With collectors,
 // discovery returns conda prefixes validated through inventory and marker-backed
@@ -80,6 +88,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		snapshot.Inspection.AccessErrors++
 	}
 	progress := progressFrom(ctx)
+	recorder := inspectionRecorder{summary: snapshot.Inspection, progress: progress}
 	if progress != nil {
 		progress.Total.Store(uint64(len(report.Environments)))
 		progress.Started.Store(true)
@@ -94,13 +103,32 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		}
 		snapshot.Issues = append(snapshot.Issues, Issue{Capability: capability, Path: issue.Path, Message: issue.Error, AccessDenied: issue.AccessDenied})
 	}
-	readHistoryCoverage := NotCollected
-	if readHistory {
-		readHistoryCoverage = Complete
+	cancelErr := validateHostEnvironments(ctx, report, req, &snapshot, recorder)
+	if cancelErr != nil {
+		discoveryErr = errors.Join(discoveryErr, cancelErr)
 	}
-	// Discovery candidates are not proof of conda metadata. Each prefix is validated
-	// through inventory.CondaRecords. Validated targets accumulate in snapshot so every
-	// return path keeps them: a cancellation or later error never drops earlier evidence.
+	envs, coverage := prepareHostEnvironments(&snapshot, req, readHistory, discoveryErr != nil || cancelErr != nil)
+	// Project association uses the final validated list and runs once, only when the
+	// collection finished without cancellation.
+	if req.Project != "" && discoveryErr == nil && cancelErr == nil {
+		if err := associateHostProject(ctx, &snapshot, envs, req, recorder); err != nil {
+			return snapshot, err
+		}
+	}
+	cancelErr = inspectHostEnvironments(ctx, envs, report.Issues, readHistory, recorder, cancelErr)
+	if len(snapshot.Targets) == 0 && len(report.Roots) > 0 {
+		snapshot.Targets = append(snapshot.Targets, Target{ID: FileID(report.Roots[0]), Kind: "dir", Input: report.Roots[0], Roots: report.Roots,
+			Prefixes: []Prefix{}, Coverage: map[string]string{"prefixes": coverage}, Issues: []Issue{}})
+		for _, capability := range req.Capabilities {
+			snapshot.Targets[0].Coverage[capability] = coverage
+		}
+	}
+	return snapshot, errors.Join(discoveryErr, cancelErr)
+}
+
+// Discovery candidates become targets only after canonical validation. Preserve
+// accepted records on cancellation so later stages and every early return retain them.
+func validateHostEnvironments(ctx context.Context, report discovery.Report, req Request, snapshot *Snapshot, recorder inspectionRecorder) error {
 	var validated []Target
 	var cancelErr error
 	for _, env := range report.Environments {
@@ -112,8 +140,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		if env.Kind == discovery.KindVenv {
 			if len(req.VirtualenvCapabilities) == 0 {
 				snapshot.Issues = append(snapshot.Issues, Issue{Capability: "evaluation", Path: env.Path, Message: "virtualenv lint is not supported by the selected rules; use find or scan"})
-				snapshot.Inspection.Failed++
-				progress.finish(true, 0)
+				recorder.finish(true, time.Time{})
 			} else {
 				validated = append(validated, Target{ID: FileID(env.Path), Kind: "dir", Input: env.Path, Roots: report.Roots,
 					Prefixes: []Prefix{{Kind: env.Kind, Path: env.Path, RecordCoverage: NotCollected}}, Coverage: map[string]string{}, Issues: []Issue{}})
@@ -121,15 +148,9 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			continue
 		}
 		start := time.Now()
-		if progress != nil {
-			progress.ActiveStarted.Store(start.UnixNano())
-			progress.Active.Store(1)
-		}
+		recorder.begin(start)
 		records, err := condaRecordsForPrefix(ctx, env.Path)
-		if progress != nil {
-			progress.Active.Store(0)
-			progress.ActiveStarted.Store(0)
-		}
+		recorder.end()
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			cancelErr = ctxErr
 		}
@@ -139,8 +160,7 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		}
 		if len(records) == 0 {
 			if cancelErr == nil {
-				snapshot.Inspection.Failed++
-				progress.finish(true, 0)
+				recorder.finish(true, time.Time{})
 			}
 			if err == nil {
 				snapshot.Issues = append(snapshot.Issues, Issue{Capability: "prefixes", Path: env.Path, Message: "no valid conda package metadata; prefix not counted"})
@@ -165,12 +185,13 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 		}
 	}
 	snapshot.Targets = validated
-	if cancelErr != nil {
-		discoveryErr = errors.Join(discoveryErr, cancelErr)
-	}
-	// Final coverage is computed once, after every issue is known.
+	return cancelErr
+}
+
+// Bind the final validated targets and their request scope before association or facts.
+func prepareHostEnvironments(snapshot *Snapshot, req Request, readHistory, incomplete bool) ([]hostEnvironment, string) {
 	coverage := Complete
-	if discoveryErr != nil || cancelErr != nil {
+	if incomplete {
 		coverage = Partial
 	}
 	for _, issue := range snapshot.Issues {
@@ -178,115 +199,97 @@ func CollectHost(ctx context.Context, roots []string, req Request) (Snapshot, er
 			coverage = Partial
 		}
 	}
-	historyCoverage := readHistoryCoverage
+	historyCoverage := NotCollected
+	if readHistory {
+		historyCoverage = Complete
+	}
 	for _, issue := range snapshot.Issues {
 		if issue.Capability == "history" {
 			historyCoverage = Partial
 		}
 	}
+	envs := make([]hostEnvironment, len(snapshot.Targets))
 	for i := range snapshot.Targets {
 		target := &snapshot.Targets[i]
-		targetReq := req.ForEnvironment(target.Prefixes[0].Kind)
+		prefix := target.Prefixes[0]
+		envs[i] = hostEnvironment{target: target, prefix: prefix, request: req.ForEnvironment(prefix.Kind)}
+		targetReq := envs[i].request
 		target.Coverage["prefixes"] = coverage
 		target.Coverage["history"] = historyCoverage
 		if target.IsVirtualenv() {
 			target.Coverage["history"] = NotCollected
 		}
-		if readHistory && (discoveryErr != nil || cancelErr != nil) {
+		if readHistory && incomplete {
 			target.Coverage["history"] = Partial
 		}
 		if Requested(targetReq, "project-association") {
 			target.Coverage["project-association"] = Complete
 		}
-		for _, capability := range []string{"conda-records", "python-distributions", "host-cache", "installed-lock"} {
-			target.Coverage[capability] = NotCollected
-			if Requested(targetReq, capability) {
-				target.Coverage[capability] = Complete
-			}
-		}
+		target.initCoverage(targetReq, []string{"conda-records", "python-distributions", "host-cache", "installed-lock"})
 		if Requested(targetReq, "conda-records") {
-			target.Coverage["conda-records"] = target.Prefixes[0].RecordCoverage
+			target.Coverage["conda-records"] = prefix.RecordCoverage
 		}
 	}
-	// Project association uses the final validated list and runs once, only when the
-	// collection finished without cancellation.
-	if req.Project != "" && discoveryErr == nil && cancelErr == nil {
-		var projectTarget *Target
-		prefixCount := 0
-		for i := range snapshot.Targets {
-			if !snapshot.Targets[i].IsVirtualenv() {
-				projectTarget = &snapshot.Targets[i]
-				prefixCount++
-			}
-		}
-		if prefixCount != 1 {
-			return snapshot, errors.Join(discoveryErr, fmt.Errorf("--project requires exactly one validated prefix for an explicit association"))
-		}
-		if Requested(req, "project-association") {
-			project, issue, err := collectProjectContext(ctx, req.Project)
-			if err != nil {
-				snapshot.Inspection.AccessErrors += accessErrorCount(err)
-				if ctx.Err() == nil {
-					snapshot.Inspection.Failed++
-					progress.finish(true, 0)
-				}
-				return snapshot, err
-			}
-			target := projectTarget
-			target.Project = project
-			if issue != nil {
-				target.Issues = append(target.Issues, *issue)
-				target.Coverage["project-association"] = Partial
-			}
+	return envs, coverage
+}
+
+func associateHostProject(ctx context.Context, snapshot *Snapshot, envs []hostEnvironment, req Request, recorder inspectionRecorder) error {
+	var projectTarget *Target
+	prefixCount := 0
+	for _, env := range envs {
+		if env.prefix.Kind != discovery.KindVenv {
+			projectTarget = env.target
+			prefixCount++
 		}
 	}
+	if prefixCount != 1 {
+		return errors.Join(nil, fmt.Errorf("--project requires exactly one validated prefix for an explicit association"))
+	}
+	if Requested(req, "project-association") {
+		project, issue, err := collectProjectContext(ctx, req.Project)
+		if err != nil {
+			snapshot.Inspection.AccessErrors += accessErrorCount(err)
+			if ctx.Err() == nil {
+				recorder.finish(true, time.Time{})
+			}
+			return err
+		}
+		target := projectTarget
+		target.Project = project
+		if issue != nil {
+			target.Issues = append(target.Issues, *issue)
+			target.Coverage["project-association"] = Partial
+		}
+	}
+	return nil
+}
+
+func inspectHostEnvironments(ctx context.Context, envs []hostEnvironment, issues []discovery.Issue, readHistory bool, recorder inspectionRecorder, cancelErr error) error {
 	caches := map[string]Target{}
-	for i := range snapshot.Targets {
-		target := &snapshot.Targets[i]
+	for _, env := range envs {
+		target := env.target
 		if cancelErr != nil || ctx.Err() != nil {
-			for capability, state := range target.Coverage {
-				if state != NotCollected {
-					target.Coverage[capability] = Partial
-				}
-			}
+			target.markCollectedPartial()
 			continue
 		}
 		start := time.Now()
-		if progress != nil {
-			progress.ActiveStarted.Store(start.UnixNano())
-			progress.Active.Store(1)
-		}
-		if err := collectHostFacts(ctx, target, req.ForEnvironment(target.Prefixes[0].Kind), caches); err != nil {
+		recorder.begin(start)
+		if err := env.collectFacts(ctx, caches); err != nil {
 			cancelErr = errors.Join(cancelErr, err)
 		}
 		if ctx.Err() != nil {
-			if progress != nil {
-				progress.Active.Store(0)
-				progress.ActiveStarted.Store(0)
-			}
+			recorder.end()
 			continue
 		}
-		failed := len(target.Issues) != 0 || target.Prefixes[0].RecordCoverage == Partial
-		for _, issue := range report.Issues {
+		failed := len(target.Issues) != 0 || env.prefix.RecordCoverage == Partial
+		for _, issue := range issues {
 			if issue.Path == filepath.Join(target.Input, "conda-meta", "history") && readHistory {
 				failed = true
 			}
 		}
-		if failed {
-			snapshot.Inspection.Failed++
-		} else {
-			snapshot.Inspection.Inspected++
-		}
-		progress.finish(failed, time.Since(start))
+		recorder.finish(failed, start)
 	}
-	if len(snapshot.Targets) == 0 && len(report.Roots) > 0 {
-		snapshot.Targets = append(snapshot.Targets, Target{ID: FileID(report.Roots[0]), Kind: "dir", Input: report.Roots[0], Roots: report.Roots,
-			Prefixes: []Prefix{}, Coverage: map[string]string{"prefixes": coverage}, Issues: []Issue{}})
-		for _, capability := range req.Capabilities {
-			snapshot.Targets[0].Coverage[capability] = coverage
-		}
-	}
-	return snapshot, errors.Join(discoveryErr, cancelErr)
+	return cancelErr
 }
 
 func accessErrorCount(err error) int {

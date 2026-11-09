@@ -26,39 +26,27 @@ const (
 var hostPythonVersionDirectory = regexp.MustCompile(`^python[0-9]+\.[0-9]+t?$`)
 
 func hostIssue(target *Target, capability, path, message string, causes ...error) {
-	target.Coverage[capability] = Partial
-	if len(target.Issues) < hostEntryLimit {
-		issue := Issue{Capability: capability, Path: path, Message: message}
-		for _, err := range causes {
-			issue.AccessDenied = issue.AccessDenied || errors.Is(err, fs.ErrPermission)
-		}
-		target.Issues = append(target.Issues, issue)
-	}
+	target.recordIssue(capability, path, message, hostEntryLimit, causes...)
 }
 
-func collectHostFacts(ctx context.Context, target *Target, req Request, caches map[string]Target) error {
-	if Requested(req, "python-distributions") {
-		collectHostPython(ctx, target)
+func (env hostEnvironment) collectFacts(ctx context.Context, caches map[string]Target) error {
+	if Requested(env.request, "python-distributions") {
+		collectHostPython(ctx, env.target, env.prefix)
 	}
-	if Requested(req, "host-cache") && ctx.Err() == nil {
-		collectHostCache(ctx, target, caches)
+	if Requested(env.request, "host-cache") && ctx.Err() == nil {
+		collectHostCache(ctx, env.target, env.prefix, caches)
 	}
-	if Requested(req, "installed-lock") && ctx.Err() == nil {
-		collectHostPixi(ctx, target, req)
+	if Requested(env.request, "installed-lock") && ctx.Err() == nil {
+		collectHostPixi(ctx, env.target, env.prefix, env.request)
 	}
 	if err := ctx.Err(); err != nil {
-		for capability, state := range target.Coverage {
-			if state != NotCollected {
-				target.Coverage[capability] = Partial
-			}
-		}
+		env.target.markCollectedPartial()
 		return err
 	}
 	return nil
 }
 
-func collectHostPython(ctx context.Context, target *Target) {
-	prefix := target.Prefixes[0]
+func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 	root, err := os.OpenRoot(prefix.Path)
 	if err != nil {
 		hostIssue(target, "python-distributions", prefix.Path, "Python filesystem unavailable", err)
@@ -179,9 +167,9 @@ func collectHostPython(ctx context.Context, target *Target) {
 	sort.Slice(target.Python, func(i, j int) bool { return target.Python[i].Path < target.Python[j].Path })
 }
 
-func collectHostCache(ctx context.Context, target *Target, caches map[string]Target) {
+func collectHostCache(ctx context.Context, target *Target, prefix Prefix, caches map[string]Target) {
 	roots := map[string]bool{}
-	for _, located := range target.Prefixes[0].Records {
+	for _, located := range prefix.Records {
 		record := located.Record
 		paths := []string{record.ExtractedPackageDir, record.PackageTarballFullPath}
 		if record.Link != nil {
@@ -198,7 +186,7 @@ func collectHostCache(ctx context.Context, target *Target, caches map[string]Tar
 			roots[filepath.Dir(filepath.Clean(path))] = true
 		}
 	}
-	if target.Prefixes[0].RecordCoverage != Complete {
+	if prefix.RecordCoverage != Complete {
 		hostIssue(target, "host-cache", target.Input, "record-referenced cache roots are incomplete")
 	}
 	var ordered []string

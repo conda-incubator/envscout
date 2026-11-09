@@ -45,3 +45,37 @@ func (p *Progress) finish(failed bool, duration time.Duration) {
 		p.ActiveStarted.Store(0)
 	}
 }
+
+// inspectionRecorder pairs host summary counts with optional live progress.
+// Validation can be active without finishing an attempt or adding a timing sample.
+type inspectionRecorder struct {
+	summary  *InspectionSummary
+	progress *Progress
+}
+
+func (r inspectionRecorder) begin(start time.Time) {
+	if r.progress != nil {
+		r.progress.ActiveStarted.Store(start.UnixNano())
+		r.progress.Active.Store(1)
+	}
+}
+
+func (r inspectionRecorder) end() {
+	if r.progress != nil {
+		r.progress.Active.Store(0)
+		r.progress.ActiveStarted.Store(0)
+	}
+}
+
+func (r inspectionRecorder) finish(failed bool, start time.Time) {
+	if failed {
+		r.summary.Failed++
+	} else {
+		r.summary.Inspected++
+	}
+	var duration time.Duration
+	if !start.IsZero() {
+		duration = time.Since(start)
+	}
+	r.progress.finish(failed, duration)
+}

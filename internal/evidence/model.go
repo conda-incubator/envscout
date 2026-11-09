@@ -2,6 +2,8 @@
 package evidence
 
 import (
+	"errors"
+	"io/fs"
 	"time"
 
 	"github.com/conda-incubator/envscout/internal/discovery"
@@ -132,6 +134,37 @@ func (r Request) ForEnvironment(kind string) Request {
 
 func (t Target) IsVirtualenv() bool {
 	return t.Kind == "dir" && len(t.Prefixes) == 1 && t.Prefixes[0].Kind == discovery.KindVenv
+}
+
+func (t *Target) markCollectedPartial() {
+	for capability, state := range t.Coverage {
+		if state != NotCollected {
+			t.Coverage[capability] = Partial
+		}
+	}
+}
+
+func (t *Target) initCoverage(req Request, capabilities []string) {
+	for _, capability := range capabilities {
+		t.Coverage[capability] = NotCollected
+		if Requested(req, capability) {
+			t.Coverage[capability] = Complete
+		}
+	}
+}
+
+// Coverage degrades even when the issue is dropped; only retained causes are inspected.
+func (t *Target) recordIssue(capability, path, message string, limit int, causes ...error) bool {
+	t.Coverage[capability] = Partial
+	if len(t.Issues) >= limit {
+		return false
+	}
+	issue := Issue{Capability: capability, Path: path, Message: message}
+	for _, err := range causes {
+		issue.AccessDenied = issue.AccessDenied || errors.Is(err, fs.ErrPermission)
+	}
+	t.Issues = append(t.Issues, issue)
+	return true
 }
 
 func Requested(r Request, capability string) bool {
