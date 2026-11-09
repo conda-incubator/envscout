@@ -2,6 +2,8 @@
 package evidence
 
 import (
+	"errors"
+	"io/fs"
 	"time"
 
 	"github.com/conda-incubator/envscout/internal/discovery"
@@ -149,6 +151,20 @@ func (t *Target) initCoverage(req Request, capabilities []string) {
 			t.Coverage[capability] = Complete
 		}
 	}
+}
+
+// Coverage degrades even when the issue is dropped; only retained causes are inspected.
+func (t *Target) recordIssue(capability, path, message string, limit int, causes ...error) bool {
+	t.Coverage[capability] = Partial
+	if len(t.Issues) >= limit {
+		return false
+	}
+	issue := Issue{Capability: capability, Path: path, Message: message}
+	for _, err := range causes {
+		issue.AccessDenied = issue.AccessDenied || errors.Is(err, fs.ErrPermission)
+	}
+	t.Issues = append(t.Issues, issue)
+	return true
 }
 
 func Requested(r Request, capability string) bool {

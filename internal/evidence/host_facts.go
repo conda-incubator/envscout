@@ -26,14 +26,7 @@ const (
 var hostPythonVersionDirectory = regexp.MustCompile(`^python[0-9]+\.[0-9]+t?$`)
 
 func hostIssue(target *Target, capability, path, message string, causes ...error) {
-	target.Coverage[capability] = Partial
-	if len(target.Issues) < hostEntryLimit {
-		issue := Issue{Capability: capability, Path: path, Message: message}
-		for _, err := range causes {
-			issue.AccessDenied = issue.AccessDenied || errors.Is(err, fs.ErrPermission)
-		}
-		target.Issues = append(target.Issues, issue)
-	}
+	target.recordIssue(capability, path, message, hostEntryLimit, causes...)
 }
 
 func collectHostFacts(ctx context.Context, target *Target, req Request, caches map[string]Target) error {

@@ -211,10 +211,7 @@ func (c *imageCollector) issue(capability, p, message string) {
 	if c.target.Coverage[capability] == NotCollected {
 		return
 	}
-	c.target.Coverage[capability] = Partial
-	if len(c.target.Issues) < imageEntryLimit-len(imageCapabilities) {
-		c.target.Issues = append(c.target.Issues, Issue{Capability: capability, Path: p, Message: message})
-	} else if !c.limited["issues:"+capability] {
+	if !c.target.recordIssue(capability, p, message, imageEntryLimit-len(imageCapabilities)) && !c.limited["issues:"+capability] {
 		c.limited["issues:"+capability] = true
 		c.target.Issues = append(c.target.Issues, Issue{Capability: capability, Path: p, Message: "collection issue limit exceeded (10000)"})
 	}
