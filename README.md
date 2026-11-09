@@ -5,6 +5,8 @@
 > [!NOTE]
 > Experimental software under incubation.
 
+See [Architecture](docs/architecture.md) for components, source boundaries and command workflows.
+
 Building requires Go 1.26.8+, Rust/Cargo, Make, and a C compiler.
 
 ```sh
