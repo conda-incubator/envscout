@@ -179,7 +179,13 @@ func isTerminal(writer io.Writer) bool {
 	if !ok {
 		return false
 	}
-	return term.IsTerminal(int(file.Fd()))
+	raw, err := file.SyscallConn()
+	if err != nil {
+		return false
+	}
+	terminal := false
+	err = raw.Control(func(fd uintptr) { terminal = term.IsTerminal(int(fd)) })
+	return err == nil && terminal
 }
 
 // safeText quotes control characters so untrusted paths and messages cannot alter a terminal.

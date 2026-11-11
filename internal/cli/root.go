@@ -16,13 +16,15 @@ import (
 
 // commandOptions holds the persistent flags shared by every subcommand.
 type commandOptions struct {
-	source    string
-	format    string
-	platform  string
-	noColor   bool
-	verbose   bool
-	excludes  []string
-	outputDir string
+	source      string
+	format      string
+	platform    string
+	noColor     bool
+	verbose     bool
+	excludes    []string
+	outputDir   string
+	oscProgress string
+	debug       bool
 }
 
 // New constructs the root command without performing any filesystem operations.
@@ -33,7 +35,7 @@ func New() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	opts := &commandOptions{source: "dir", format: "text", outputDir: "sboms"}
+	opts := &commandOptions{source: "dir", format: "text", outputDir: "sboms", oscProgress: "auto"}
 	flags := root.PersistentFlags()
 	flags.Var(newEnumValue(&opts.source, "dir", "oci-archive"), "source", "input source: dir or oci-archive (offline)")
 	flags.Var(newEnumValue(&opts.format, "text", "json"), "format", "output format: text or json")
@@ -42,6 +44,8 @@ func New() *cobra.Command {
 	flags.BoolVar(&opts.verbose, "verbose", false, "show individual discovery and inspection diagnostics (find and lint)")
 	flags.StringArrayVar(&opts.excludes, "exclude", nil, "exclude folders from discovery by glob (repeatable; quote patterns)")
 	flags.StringVar(&opts.outputDir, "output-dir", opts.outputDir, "directory for SBOM output (scan only)")
+	flags.Var(newEnumValue(&opts.oscProgress, "auto", "7501", "94", "none"), "osc-progress", "terminal progress protocol: auto, 7501, 94, or none")
+	flags.BoolVar(&opts.debug, "debug", false, "show terminal progress selection diagnostics on stderr")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return inputError(err) })
 	// Only scan writes SBOMs, so an explicit --output-dir elsewhere would be silently ignored.
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
@@ -56,6 +60,11 @@ func New() *cobra.Command {
 			return inputError(err)
 		}
 		cmd.SetContext(ctx)
+		osc, err := newOSCProgress(cmd, opts)
+		if err != nil {
+			return err
+		}
+		cmd.SetContext(context.WithValue(ctx, oscKey{}, osc))
 		return nil
 	}
 	root.AddCommand(findCommand(opts), scanCommand(opts), lintCommand(opts))

@@ -15,7 +15,8 @@ func scanCommand(opts *commandOptions) *cobra.Command {
 		Use:   "scan ROOT...",
 		Short: "Write prefix SBOMs for directories or one whole-image SBOM for an OCI archive",
 		Args:  cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, inputs []string) error {
+		RunE: func(cmd *cobra.Command, inputs []string) (result error) {
+			defer func() { result = errors.Join(result, oscFrom(cmd.Context()).finish(result)) }()
 			if cmd.Flags().Changed("output-dir") && opts.outputDir == "" {
 				return inputError(errors.New("--output-dir must not be empty"))
 			}

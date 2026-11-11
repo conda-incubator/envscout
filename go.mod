@@ -7,6 +7,7 @@ require (
 	github.com/anchore/syft v1.54.0
 	github.com/aquasecurity/go-pep440-version v0.0.1
 	github.com/bmatcuk/doublestar/v4 v4.10.2
+	github.com/buildkite/osc7501 v0.3.1
 	github.com/charlievieth/fastwalk v1.0.14
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/conda-incubator/go-rattler v0.0.3
