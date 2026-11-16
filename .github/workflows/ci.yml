@@ -63,6 +63,7 @@ jobs:
           path-type: inherit
       - uses: actions-rust-lang/setup-rust-toolchain@v2.0.1
         with:
+          toolchain: stable
           target: ${{ matrix.rust-target }}
           cache: true
           cache-workspaces: ${{ steps.rattler.outputs.workspace }}

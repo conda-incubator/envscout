@@ -3,14 +3,14 @@ module github.com/conda-incubator/envscout
 go 1.27.3
 
 require (
-	github.com/anchore/stereoscope v0.4.1
+	github.com/anchore/stereoscope v0.4.2
 	github.com/anchore/syft v1.57.1
 	github.com/aquasecurity/go-pep440-version v0.0.1
 	github.com/bmatcuk/doublestar/v4 v4.10.4
 	github.com/buildkite/osc7501 v0.4.0
 	github.com/charlievieth/fastwalk v1.0.14
 	github.com/charmbracelet/x/ansi v0.11.9
-	github.com/conda-incubator/go-rattler v0.0.3
+	github.com/conda-incubator/go-rattler v0.0.4
 	github.com/fatih/color v1.19.0
 	github.com/google/go-containerregistry v0.22.1
 	github.com/spf13/cobra v1.10.2
@@ -237,7 +237,7 @@ require (
 	github.com/sassoftware/go-rpmutils v0.4.0 // indirect
 	github.com/scylladb/go-set v1.0.3-0.20200225121959-cc7b2070d91e // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.11.1 // indirect
-	github.com/sergi/go-diff v1.4.0 // indirect
+	github.com/sergi/go-diff v1.4.2 // indirect
 	github.com/shopspring/decimal v1.6.0 // indirect
 	github.com/sigstore/fulcio v1.10.1 // indirect
 	github.com/sigstore/protobuf-specs v0.5.2 // indirect
