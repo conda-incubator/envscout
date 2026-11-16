@@ -33,7 +33,7 @@ jobs:
           source_dir="$(go list -m -f '{{.Dir}}' github.com/conda-incubator/go-rattler)"
           test -n "$source_dir"
           echo "workspace=$source_dir/internal/native" >> "$GITHUB_OUTPUT"
-      - uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+      - uses: actions-rust-lang/setup-rust-toolchain@v2.0.1
         with:
           cache: true
           cache-workspaces: ${{ steps.rattler.outputs.workspace }}

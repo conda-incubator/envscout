@@ -61,7 +61,7 @@ jobs:
           # Keep the MSYS2 MINGW64 bin directory on PATH so Go cgo and
           # Rust both find gcc/ld for the x86_64-pc-windows-gnu target.
           path-type: inherit
-      - uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+      - uses: actions-rust-lang/setup-rust-toolchain@v2.0.1
         with:
           target: ${{ matrix.rust-target }}
           cache: true
@@ -85,7 +85,7 @@ jobs:
         # One make invocation runs the shared `native` prerequisite once
         # before test, vet, and build.
       - name: Upload CLI binary
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: envscout-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ${{ matrix.binary }}
