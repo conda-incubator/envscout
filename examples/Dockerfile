@@ -1,6 +1,6 @@
 # Deliberately unsuitable runtime image: keep base, app env, cache, apt, and shell.
 # No dependency lock or separate runtime stage is used. Do not deploy this example.
-FROM anaconda/miniconda:26.7.1
+FROM anaconda/miniconda:26.9.4
 
 # Build tooling is intentionally shipped rather than isolated in a builder stage.
 RUN apt-get update && apt-get install -y --no-install-recommends make \
