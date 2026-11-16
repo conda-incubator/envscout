@@ -14,6 +14,15 @@ RATTLER_MODULE = github.com/conda-incubator/go-rattler
 RATTLER_TARGET_DIR = $(abspath .go-rattler-native)
 TMP_DIR = $(abspath .tmp)
 BINARY ?= envscout
+GO_LDFLAGS ?= -s -w
+
+# Optimize the pinned native module without editing its read-only manifest.
+# Keep linkable symbols and panic unwinding for the FFI's catch_unwind boundary.
+export CARGO_PROFILE_RELEASE_OPT_LEVEL ?= 3
+export CARGO_PROFILE_RELEASE_LTO ?= thin
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS ?= 1
+export CARGO_PROFILE_RELEASE_DEBUG ?= 0
+export CARGO_PROFILE_RELEASE_STRIP ?= debuginfo
 
 # Cargo writes to <target>/<CARGO_BUILD_TARGET>/release when a target is set,
 # otherwise <target>/release. Windows GNU builds set CARGO_BUILD_TARGET so the
@@ -54,7 +63,7 @@ native: | tmp-dir
 	  CARGO_TARGET_DIR="$(RATTLER_TARGET_DIR)" cargo build --manifest-path "$$source_dir/internal/native/Cargo.toml" --release --locked
 
 build: native
-	go build -o "$(BINARY)" ./cmd/envscout
+	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o "$(BINARY)" ./cmd/envscout
 
 test: native
 	go test ./...
