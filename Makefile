@@ -46,8 +46,11 @@ tmp-dir:
 # Builds the go-rattler static archive from the pinned module source.
 # Shared prerequisite: make runs it once per invocation even when several
 # targets (build test vet lint) are requested together.
+# Check the pin even when Rust is installed without rustup.
 native: | tmp-dir
 	@set -eu; \
+	  rust_version="$$(tr -d '\r\n' < rust-toolchain)"; compiler="$$(rustc --version)"; \
+	  case "$$compiler" in "rustc $$rust_version "*) ;; *) printf 'Expected Rust %s from rust-toolchain, got %s\n' "$$rust_version" "$$compiler" >&2; exit 1;; esac; \
 	  go mod download $(RATTLER_MODULE); \
 	  source_dir="$$(go list -m -f '{{.Dir}}' $(RATTLER_MODULE))"; \
 	  test -n "$$source_dir" || { echo 'go-rattler module source not found' >&2; exit 1; }; \
