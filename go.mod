@@ -153,7 +153,7 @@ require (
 	github.com/google/go-intervals v0.0.2 // indirect
 	github.com/google/licensecheck v0.3.1 // indirect
 	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 // indirect
-	github.com/google/s2a-go v0.1.9 // indirect
+	github.com/google/s2a-go v0.1.11 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.20 // indirect
 	github.com/googleapis/gax-go/v2 v2.24.0 // indirect
