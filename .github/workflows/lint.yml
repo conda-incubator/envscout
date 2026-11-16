@@ -47,6 +47,6 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9.3.0
         with:
-          version: v2.14.0
+          version: v2.15.0
         env:
           CGO_LDFLAGS: -L${{ github.workspace }}/.go-rattler-native/release
