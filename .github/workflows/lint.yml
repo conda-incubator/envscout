@@ -35,7 +35,6 @@ jobs:
           echo "workspace=$source_dir/internal/native" >> "$GITHUB_OUTPUT"
       - uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
         with:
-          toolchain: stable
           cache: true
           cache-workspaces: ${{ steps.rattler.outputs.workspace }}
           cache-targets: false
