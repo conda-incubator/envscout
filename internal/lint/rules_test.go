@@ -136,12 +136,12 @@ func TestENV001ThresholdDefaultAndOverride(t *testing.T) {
 	target := completeTarget("dir")
 	target.Prefixes = []evidence.Prefix{{Path: "/env", Revision: intPtr(12)}}
 	policy := testPolicy(t, "ENV001", "local")
-	outcome, findings := evaluateRule(target, policy, rule)
+	outcome, findings := executionFromPolicy(policy).evaluateRule(target, rule)
 	if len(findings) != 1 || findings[0].Evidence.RevisionThreshold == nil || *findings[0].Evidence.RevisionThreshold != 10 {
 		t.Fatalf("default threshold 10: findings=%+v outcome=%+v", findings, outcome)
 	}
 	policy.Rules["ENV001"] = RuleOptions{Enabled: policy.Rules["ENV001"].Enabled, Severity: Info, RevisionThreshold: intPtr(12)}
-	_, findings = evaluateRule(target, policy, rule)
+	_, findings = executionFromPolicy(policy).evaluateRule(target, rule)
 	if len(findings) != 1 || *findings[0].Evidence.RevisionThreshold != 12 {
 		t.Fatalf("override threshold 12: findings=%+v", findings)
 	}
@@ -162,24 +162,24 @@ func TestENV001PositiveNegativeUnknown(t *testing.T) {
 
 	positive := completeTarget("dir")
 	positive.Prefixes = []evidence.Prefix{{Path: "/env", Revision: intPtr(10)}}
-	if outcome, findings := evaluateRule(positive, policy, rule); outcome.Status != FindingStatus || len(findings) != 1 {
+	if outcome, findings := executionFromPolicy(policy).evaluateRule(positive, rule); outcome.Status != FindingStatus || len(findings) != 1 {
 		t.Fatalf("positive: status=%s findings=%d", outcome.Status, len(findings))
 	}
 
 	negative := completeTarget("dir")
 	negative.Prefixes = []evidence.Prefix{{Path: "/env", Revision: intPtr(9)}}
-	if outcome, findings := evaluateRule(negative, policy, rule); outcome.Status != Pass || len(findings) != 0 {
+	if outcome, findings := executionFromPolicy(policy).evaluateRule(negative, rule); outcome.Status != Pass || len(findings) != 0 {
 		t.Fatalf("negative: status=%s findings=%d", outcome.Status, len(findings))
 	}
 
 	unknown := completeTarget("dir")
 	unknown.Prefixes = []evidence.Prefix{{Path: "/env", Revision: nil}}
-	if outcome, _ := evaluateRule(unknown, policy, rule); outcome.Status != Unknown {
+	if outcome, _ := executionFromPolicy(policy).evaluateRule(unknown, rule); outcome.Status != Unknown {
 		t.Fatalf("missing revision must be unknown, got %s", outcome.Status)
 	}
 
 	empty := completeTarget("dir")
-	if outcome, _ := evaluateRule(empty, policy, rule); outcome.Status != NotApplicable {
+	if outcome, _ := executionFromPolicy(policy).evaluateRule(empty, rule); outcome.Status != NotApplicable {
 		t.Fatalf("zero subjects with complete coverage must be not_applicable, got %s", outcome.Status)
 	}
 }
@@ -194,7 +194,7 @@ func TestPhase4HistoryTransactionCountKeepsRevisionThreshold(t *testing.T) {
 		t.Run(fmt.Sprint(revision), func(t *testing.T) {
 			target := completeTarget("dir")
 			target.Prefixes = []evidence.Prefix{{Path: "/env", Revision: intPtr(revision)}}
-			outcome, findings := evaluateRule(target, policy, rule)
+			outcome, findings := executionFromPolicy(policy).evaluateRule(target, rule)
 			if revision < 10 {
 				if outcome.Status != Pass || len(findings) != 0 {
 					t.Fatalf("revision below threshold became a finding: %+v %+v", outcome, findings)
@@ -225,19 +225,19 @@ func TestPhase4AssociatedLockPresenceAndAbsentProject(t *testing.T) {
 	rule := mustRule(t, "ENV002")
 	policy := testPolicy(t, rule.ID, "local")
 	target := completeTarget("dir")
-	if outcome, findings := evaluateRule(target, policy, rule); outcome.Status != NotApplicable || len(findings) != 0 {
+	if outcome, findings := executionFromPolicy(policy).evaluateRule(target, rule); outcome.Status != NotApplicable || len(findings) != 0 {
 		t.Errorf("no project is not applicable: %+v %+v", outcome, findings)
 	}
 	for _, name := range []string{"pixi.lock", "conda-lock.yml", "conda-lock.yaml", "uv.lock", "poetry.lock", "Pipfile.lock"} {
 		t.Run(name, func(t *testing.T) {
 			target.Project = &evidence.Project{Path: "/proj", Associated: true, LockPath: "/proj/" + name}
-			if outcome, findings := evaluateRule(target, policy, rule); outcome.Status != Pass || len(findings) != 0 {
+			if outcome, findings := executionFromPolicy(policy).evaluateRule(target, rule); outcome.Status != Pass || len(findings) != 0 {
 				t.Errorf("supported lock presence does not need synchronization verification: %+v %+v", outcome, findings)
 			}
 		})
 	}
 	target.Project = &evidence.Project{Path: "/proj", Associated: true}
-	outcome, findings := evaluateRule(target, policy, rule)
+	outcome, findings := executionFromPolicy(policy).evaluateRule(target, rule)
 	if outcome.Status != FindingStatus || len(findings) != 1 {
 		t.Fatalf("missing associated lock must produce a finding: %+v %+v", outcome, findings)
 	}
@@ -260,7 +260,7 @@ func TestPhase4RuntimeToolingPassesAndDistinctApplicationIsObservation(t *testin
 			target := completeTarget("oci-archive")
 			target.Prefixes = []evidence.Prefix{{Path: "/opt/conda", Tooling: true}, {Path: "/opt/conda/envs/app"}}
 			target.RuntimePrefix, target.RuntimeUsesTooling = tc.runtime, tc.usesTooling
-			if outcome, findings := evaluateRule(target, policy, rule); outcome.Status != Pass || len(findings) != 0 {
+			if outcome, findings := executionFromPolicy(policy).evaluateRule(target, rule); outcome.Status != Pass || len(findings) != 0 {
 				t.Errorf("runtime depends on tooling; no removal candidate: %+v %+v", outcome, findings)
 			}
 		})
@@ -268,7 +268,7 @@ func TestPhase4RuntimeToolingPassesAndDistinctApplicationIsObservation(t *testin
 	target := completeTarget("oci-archive")
 	target.Prefixes = []evidence.Prefix{{Path: "/opt/conda", Tooling: true}, {Path: "/app"}}
 	target.RuntimePrefix = "/app"
-	outcome, findings := evaluateRule(target, policy, rule)
+	outcome, findings := executionFromPolicy(policy).evaluateRule(target, rule)
 	if outcome.Status != FindingStatus || len(findings) != 1 {
 		t.Fatalf("distinct application candidate: %+v %+v", outcome, findings)
 	}
@@ -291,7 +291,7 @@ func TestENV001NextCommandIsPlatformSafe(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			target := completeTarget("dir")
 			target.Prefixes = []evidence.Prefix{{Path: path, Revision: intPtr(10)}}
-			_, findings := evaluateRule(target, policy, rule)
+			_, findings := executionFromPolicy(policy).evaluateRule(target, rule)
 			if len(findings) != 1 || !slices.Contains(findings[0].Evidence.Paths, path) {
 				t.Fatalf("hostile path must remain an observation: %+v", findings)
 			}
@@ -317,7 +317,7 @@ func TestENV001ImageActionNamesItsSourceContext(t *testing.T) {
 	target := completeTarget("oci-archive")
 	target.Prefixes = []evidence.Prefix{{Path: "/opt/conda", Revision: intPtr(10)}}
 	rule := mustRule(t, "ENV001")
-	outcome, findings := evaluateRule(target, testPolicy(t, rule.ID, "container-development"), rule)
+	outcome, findings := executionFromPolicy(testPolicy(t, rule.ID, "container-development")).evaluateRule(target, rule)
 	if outcome.Status != FindingStatus || len(findings) != 1 {
 		t.Fatalf("image history observation lost: %+v %+v", outcome, findings)
 	}
@@ -332,26 +332,26 @@ func TestENV002PositiveNegativeUnknown(t *testing.T) {
 
 	positive := completeTarget("dir")
 	positive.Project = &evidence.Project{Path: "/proj", Associated: true}
-	if outcome, findings := evaluateRule(positive, policy, rule); outcome.Status != FindingStatus || len(findings) != 1 {
+	if outcome, findings := executionFromPolicy(policy).evaluateRule(positive, rule); outcome.Status != FindingStatus || len(findings) != 1 {
 		t.Fatalf("positive: status=%s", outcome.Status)
 	}
 
 	verified := completeTarget("dir")
 	verified.Project = &evidence.Project{Path: "/proj", Associated: true, LockPath: "/proj/pixi.lock"}
-	if outcome, findings := evaluateRule(verified, policy, rule); outcome.Status != Pass || len(findings) != 0 {
+	if outcome, findings := executionFromPolicy(policy).evaluateRule(verified, rule); outcome.Status != Pass || len(findings) != 0 {
 		t.Fatalf("verified lock must pass, got %s", outcome.Status)
 	}
 
 	unverified := completeTarget("dir")
 	unverified.Project = &evidence.Project{Path: "/proj", Associated: true, LockPath: "/proj/pixi.lock"}
-	if outcome, findings := evaluateRule(unverified, policy, rule); outcome.Status != Pass || len(findings) != 0 {
+	if outcome, findings := executionFromPolicy(policy).evaluateRule(unverified, rule); outcome.Status != Pass || len(findings) != 0 {
 		t.Fatalf("supported existing lock must pass without verification, got %+v %+v", outcome, findings)
 	}
 
 	incomplete := completeTarget("dir")
 	incomplete.Project = &evidence.Project{Path: "/proj", Associated: true}
 	incomplete.Coverage["project-association"] = evidence.Partial
-	if outcome, _ := evaluateRule(incomplete, policy, rule); outcome.Status != Unknown {
+	if outcome, _ := executionFromPolicy(policy).evaluateRule(incomplete, rule); outcome.Status != Unknown {
 		t.Fatalf("incomplete associated project inspection must be unknown, got %s", outcome.Status)
 	}
 }
@@ -379,7 +379,7 @@ func TestArtifactRulesPositiveNegativeUnknown(t *testing.T) {
 		policy := testPolicy(t, id, "container-distroless")
 
 		positive := artifactTarget("oci-archive", spec.field, artifact)
-		outcome, findings := evaluateRule(positive, policy, rule)
+		outcome, findings := executionFromPolicy(policy).evaluateRule(positive, rule)
 		if outcome.Status != FindingStatus || len(findings) != 1 || findings[0].Evidence.Count != 1 {
 			t.Errorf("%s positive: status=%s findings=%d", id, outcome.Status, len(findings))
 		}
@@ -388,13 +388,13 @@ func TestArtifactRulesPositiveNegativeUnknown(t *testing.T) {
 		}
 
 		negative := artifactTarget("oci-archive", spec.field, nil)
-		if outcome, findings := evaluateRule(negative, policy, rule); outcome.Status != Pass || len(findings) != 0 {
+		if outcome, findings := executionFromPolicy(policy).evaluateRule(negative, rule); outcome.Status != Pass || len(findings) != 0 {
 			t.Errorf("%s complete negative: status=%s findings=%d", id, outcome.Status, len(findings))
 		}
 
 		unknown := artifactTarget("oci-archive", spec.field, nil)
 		delete(unknown.Coverage, spec.cap)
-		if outcome, _ := evaluateRule(unknown, policy, rule); outcome.Status != Unknown {
+		if outcome, _ := executionFromPolicy(policy).evaluateRule(unknown, rule); outcome.Status != Unknown {
 			t.Errorf("%s incomplete coverage must be unknown, got %s", id, outcome.Status)
 		}
 	}
@@ -405,7 +405,7 @@ func TestIMG004ByteUnitAndNoSummedSavings(t *testing.T) {
 	policy := testPolicy(t, "IMG004", "container-runtime")
 	target := artifactTarget("oci-archive", func(t *evidence.Target, a []evidence.Artifact) { t.Retained = a },
 		[]evidence.Artifact{{Path: "/a", Bytes: 3, LayerBytes: 100, Layer: 1}, {Path: "/b", Bytes: 4, LayerBytes: 100, Layer: 1}})
-	_, findings := evaluateRule(target, policy, rule)
+	_, findings := executionFromPolicy(policy).evaluateRule(target, rule)
 	if len(findings) != 1 || findings[0].Evidence.PayloadBytes != 7 || !strings.Contains(findings[0].Evidence.ByteUnit, "retained file payload bytes") {
 		t.Fatalf("IMG004 byte evidence wrong: %+v", findings)
 	}
@@ -420,7 +420,7 @@ func TestIMG002SeverityDowngradesWhenLinkageUnsafe(t *testing.T) {
 	target := artifactTarget("oci-archive", func(t *evidence.Target, a []evidence.Artifact) { t.Extracted = a },
 		[]evidence.Artifact{{Path: "/c", Kind: "dir"}})
 	target.CacheLinked = true
-	_, findings := evaluateRule(target, policy, rule)
+	_, findings := executionFromPolicy(policy).evaluateRule(target, rule)
 	if len(findings) != 1 || findings[0].Severity != Info || len(findings[0].Evidence.Notes) == 0 {
 		t.Fatalf("cache-linked IMG002 must be info with a note: %+v", findings)
 	}
@@ -441,7 +441,7 @@ func TestIMG002RetainsDynamicCleanupSafetyNotes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			target := artifactTarget("oci-archive", func(t *evidence.Target, a []evidence.Artifact) { t.Extracted = a }, []evidence.Artifact{{Path: "/cache/python", Bytes: 30}})
 			target.CacheLinked, target.Coverage["cache-link-dependencies"] = tc.linked, tc.coverage
-			outcome, findings := evaluateRule(target, policy, rule)
+			outcome, findings := executionFromPolicy(policy).evaluateRule(target, rule)
 			if outcome.Status != FindingStatus || len(findings) != 1 {
 				t.Fatalf("positive cache observation lost: %+v %+v", outcome, findings)
 			}
@@ -470,7 +470,7 @@ func TestLocalRuleDefaultSeverities(t *testing.T) {
 		if slices.Contains([]string{"ENV007", "ENV009", "ENV010", "ENV011"}, id) {
 			wantSeverity = Warning
 		}
-		if !ruleEnabled(policy, id) || policy.Rules[id].Severity != wantSeverity || rule.Available != (id != "ENV011") {
+		if !executionFromPolicy(policy).rules[id].enabled || policy.Rules[id].Severity != wantSeverity || rule.Available != (id != "ENV011") {
 			t.Errorf("wrong local default for %s: %+v available=%t", id, policy.Rules[id], rule.Available)
 		}
 		for _, profile := range profiles[1:] {
@@ -488,20 +488,20 @@ func TestIMG003PrefixRolesPositiveNegativeUnknown(t *testing.T) {
 	positive := completeTarget("oci-archive")
 	positive.RuntimePrefix = "/app"
 	positive.Prefixes = []evidence.Prefix{{Path: "/opt/tool", Tooling: true}, {Path: "/app"}}
-	if outcome, findings := evaluateRule(positive, policy, rule); outcome.Status != FindingStatus || len(findings) != 1 {
+	if outcome, findings := executionFromPolicy(policy).evaluateRule(positive, rule); outcome.Status != FindingStatus || len(findings) != 1 {
 		t.Fatalf("positive IMG003 status=%s findings=%d", outcome.Status, len(findings))
 	}
 
 	negative := completeTarget("oci-archive")
 	negative.Prefixes = []evidence.Prefix{{Path: "/app"}}
-	if outcome, findings := evaluateRule(negative, policy, rule); outcome.Status != Pass || len(findings) != 0 {
+	if outcome, findings := executionFromPolicy(policy).evaluateRule(negative, rule); outcome.Status != Pass || len(findings) != 0 {
 		t.Fatalf("negative IMG003 status=%s findings=%d", outcome.Status, len(findings))
 	}
 
 	unknown := completeTarget("oci-archive")
 	delete(unknown.Coverage, "runtime-config")
 	unknown.Prefixes = []evidence.Prefix{{Path: "/opt/tool", Tooling: true}}
-	if outcome, _ := evaluateRule(unknown, policy, rule); outcome.Status != Unknown {
+	if outcome, _ := executionFromPolicy(policy).evaluateRule(unknown, rule); outcome.Status != Unknown {
 		t.Fatalf("incomplete runtime config must be unknown, got %s", outcome.Status)
 	}
 }
@@ -513,7 +513,7 @@ func TestUnavailableRulesNeverRunCheck(t *testing.T) {
 			t.Fatalf("%s must be unavailable with no Check", id)
 		}
 		policy := Policy{Rules: map[string]RuleOptions{id: {Enabled: boolPtr(true), Severity: Warning}}}
-		outcome, findings := evaluateRule(completeTarget("dir"), policy, rule)
+		outcome, findings := executionFromPolicy(policy).evaluateRule(completeTarget("dir"), rule)
 		if outcome.Status != Unavailable || len(findings) != 0 || outcome.Reason == "" {
 			t.Fatalf("%s: status=%s findings=%d", id, outcome.Status, len(findings))
 		}
@@ -525,11 +525,11 @@ func boolPtr(v bool) *bool { return &v }
 func TestDisabledAndInapplicableGating(t *testing.T) {
 	rule := mustRule(t, "IMG001")
 	disabled := Policy{Rules: map[string]RuleOptions{"IMG001": {Enabled: boolPtr(false), Severity: Info}}}
-	if outcome, _ := evaluateRule(completeTarget("oci-archive"), disabled, rule); outcome.Status != Disabled {
+	if outcome, _ := executionFromPolicy(disabled).evaluateRule(completeTarget("oci-archive"), rule); outcome.Status != Disabled {
 		t.Fatalf("disabled must be disabled, got %s", outcome.Status)
 	}
 	enabled := testPolicy(t, "IMG001", "container")
-	if outcome, _ := evaluateRule(completeTarget("dir"), enabled, rule); outcome.Status != NotApplicable {
+	if outcome, _ := executionFromPolicy(enabled).evaluateRule(completeTarget("dir"), rule); outcome.Status != NotApplicable {
 		t.Fatalf("dir source for IMG001 must be not_applicable, got %s", outcome.Status)
 	}
 }
@@ -581,7 +581,7 @@ func TestExtensibleRuleDispatchesThroughGenericEvaluator(t *testing.T) {
 		},
 	}
 	policy := Policy{Rules: map[string]RuleOptions{"TST001": {Enabled: boolPtr(true), Severity: Warning}}}
-	outcome, findings := evaluateRule(completeTarget("dir"), policy, extra)
+	outcome, findings := executionFromPolicy(policy).evaluateRule(completeTarget("dir"), extra)
 	if !called || outcome.Status != FindingStatus || len(findings) != 1 || findings[0].RuleID != "TST001" {
 		t.Fatalf("generic dispatch failed: called=%v status=%s", called, outcome.Status)
 	}

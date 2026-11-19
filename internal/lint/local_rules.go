@@ -444,12 +444,18 @@ func pythonSupportStatus(version string, asOf time.Time) (branch, date string, e
 	return "", "", false, false
 }
 
-func checkPythonEOL(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
+func preparePythonEOL(context evaluationContext) func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding) {
+	return func(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
+		return checkPythonEOLAt(target, opts, rule, context.now)
+	}
+}
+
+func checkPythonEOLAt(target evidence.Target, opts RuleOptions, rule Rule, now time.Time) (Outcome, []Finding) {
 	outcome := localRecordOutcome(target)
 	if outcome.Status == NotApplicable {
 		return outcome, nil
 	}
-	if target.AsOf.IsZero() {
+	if now.IsZero() {
 		outcome.Status, outcome.Reason = Unknown, "an explicit evaluation date is required for Python support status"
 		return outcome, nil
 	}
@@ -466,7 +472,7 @@ func checkPythonEOL(target evidence.Target, opts RuleOptions, rule Rule) (Outcom
 				continue
 			}
 			pythonCount++
-			branch, date, ended, known := pythonSupportStatus(located.Record.Version, target.AsOf)
+			branch, date, ended, known := pythonSupportStatus(located.Record.Version, now)
 			if !known {
 				outcome.Status, outcome.Reason = Unknown, "Python version is invalid, unlisted or beyond a scheduled support date; refresh the official status table"
 				continue
@@ -476,7 +482,7 @@ func checkPythonEOL(target evidence.Target, opts RuleOptions, rule Rule) (Outcom
 			}
 			f := newFinding(target, rule, opts.Severity, []string{prefix.Path, located.Path}, nil)
 			f.Evidence.Count = 1
-			f.Message = fmt.Sprintf("Python %s in `%s`, recorded at `%s`, belongs to branch %s whose upstream CPython support ended %s (evaluated %s). %s", located.Record.Version, prefix.Path, located.Path, branch, date, target.AsOf.UTC().Format(time.DateOnly), rule.Description)
+			f.Message = fmt.Sprintf("Python %s in `%s`, recorded at `%s`, belongs to branch %s whose upstream CPython support ended %s (evaluated %s). %s", located.Record.Version, prefix.Path, located.Path, branch, date, now.UTC().Format(time.DateOnly), rule.Description)
 			findings = append(findings, f)
 		}
 	}

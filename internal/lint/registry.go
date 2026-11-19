@@ -92,7 +92,7 @@ var registry = []Rule{
 		Confidence: "high", Fix: "Review the listed prefixes and remove an unused one with `conda env remove --prefix PATH` only after checking its project references.",
 		References: []string{"https://docs.conda.io/projects/conda/en/stable/user-guide/tasks/manage-environments.html#removing-an-environment"},
 		Exceptions: []string{"Only prefixes in the requested discovery scope are compared.", "Matching conda identities do not establish matching pip packages, files, configuration or runtime behavior, or predict disk savings."},
-		Defaults:   profileDefaults(localOnly, nil, nil), Check: checkDuplicates, prepare: prepareDuplicates,
+		Defaults:   profileDefaults(localOnly, nil, nil), Check: prepareDuplicates(evaluationContext{}), prepare: prepareDuplicates,
 	},
 	{
 		ID: "ENV007", Version: "1", Name: "Defaults and conda-forge mixed", Category: "channels",
@@ -119,7 +119,7 @@ var registry = []Rule{
 		Confidence: "high", Fix: "Create and test a replacement environment with a supported Python release, for example `conda create --name PROJECT python=3.13 PACKAGE...`.",
 		References: []string{"https://devguide.python.org/versions/"},
 		Exceptions: []string{"The upstream CPython support table is dated 2026-10-26 and evaluated against the report's evaluation date.", "Vendor-maintained interpreters may have a different support policy; EOL is not a vulnerability finding."},
-		Defaults:   profileDefaults(localOnly, allWarning, nil), Check: checkPythonEOL,
+		Defaults:   profileDefaults(localOnly, allWarning, nil), Check: preparePythonEOL(evaluationContext{}), prepare: preparePythonEOL,
 	},
 	{
 		ID: "ENV010", Version: "2", Name: "Installed conda metadata differs from pixi.lock", Category: "reproducibility",

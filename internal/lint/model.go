@@ -105,7 +105,7 @@ type Rule struct {
 	// Check returns the rule's observation; the engine supplies target/ID/status.
 	Check func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding) `json:"-"`
 	// prepare optionally shares immutable per-evaluation facts across target checks.
-	prepare func([]evidence.Prefix) func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding)
+	prepare func(evaluationContext) func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding)
 }
 
 type Outcome struct {

@@ -127,37 +127,7 @@ func BuildPolicy(config Policy, options Options) (Policy, error) {
 // unavailable and source-inapplicable rules. Explicit runtime and project
 // assertions are always included, even when no selected rule consumes them.
 func Requirements(policy Policy) evidence.Request {
-	caps := make(map[string]bool)
-	venvCaps := make(map[string]bool)
-	if policy.RuntimePrefix != "" {
-		caps["runtime-config"] = true
-	}
-	if policy.Project != "" {
-		caps["project-association"] = true
-	}
-	for _, rule := range registry {
-		if !rule.Available || !ruleEnabled(policy, rule.ID) || !slices.Contains(rule.TargetKinds, policy.Source) {
-			continue
-		}
-		for _, capability := range rule.Capabilities {
-			caps[capability] = true
-		}
-		if policy.Source == "dir" {
-			for _, capability := range rule.VirtualenvCapabilities {
-				venvCaps[capability] = true
-			}
-		}
-	}
-	request := evidence.Request{Capabilities: make([]string, 0, len(caps)), RuntimePrefix: policy.RuntimePrefix, Project: policy.Project}
-	for capability := range caps {
-		request.Capabilities = append(request.Capabilities, capability)
-	}
-	for capability := range venvCaps {
-		request.VirtualenvCapabilities = append(request.VirtualenvCapabilities, capability)
-	}
-	slices.Sort(request.Capabilities)
-	slices.Sort(request.VirtualenvCapabilities)
-	return request
+	return executionFromPolicy(policy).requirements()
 }
 
 // validateRuntimePrefix accepts only an exact clean absolute POSIX image path.
@@ -174,11 +144,6 @@ func validateRuntimePrefix(prefix string) error {
 		return fmt.Errorf("runtime prefix must be a clean path without parent traversal or redundant separators")
 	}
 	return nil
-}
-
-func ruleEnabled(policy Policy, id string) bool {
-	opts, ok := policy.Rules[id]
-	return ok && opts.Enabled != nil && *opts.Enabled
 }
 
 // validEffectivePolicy rejects incomplete settings supplied by direct callers.
@@ -226,6 +191,7 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 		r.Issues = append(r.Issues, evidence.Issue{Capability: "policy", Message: "lint evaluation requires a normalized effective policy from BuildPolicy"})
 		return r
 	}
+	execution := executionFromPolicy(policy)
 	targets := slices.Clone(snapshot.Targets)
 	slices.SortFunc(targets, func(a, b evidence.Target) int { return strings.Compare(a.ID, b.ID) })
 	var peers []evidence.Prefix
@@ -236,19 +202,17 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 			}
 		}
 	}
+	context := evaluationContext{now: now, peers: peers}
 	checks := map[string]func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding){}
 	for _, rule := range registry {
-		options := policy.Rules[rule.ID]
-		if rule.prepare != nil && options.Enabled != nil && *options.Enabled && slices.Contains(rule.TargetKinds, policy.Source) {
-			checks[rule.ID] = rule.prepare(peers)
+		if rule.prepare != nil && execution.rules[rule.ID].enabled && slices.Contains(rule.TargetKinds, execution.source) {
+			checks[rule.ID] = rule.prepare(context)
 		}
 	}
-	request := Requirements(policy)
+	request := execution.requirements()
 	truncated := false
 	for _, target := range targets {
-		target.Peers = peers
-		target.AsOf = now
-		r.Issues = append(r.Issues, targetIssues(target, policy, request)...)
+		r.Issues = append(r.Issues, execution.targetIssues(target, request)...)
 		projection := targetReport(target)
 		r.Targets = append(r.Targets, projection)
 		r.Issues = append(r.Issues, projection.Issues...)
@@ -256,7 +220,7 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 			if check := checks[rule.ID]; check != nil {
 				rule.Check = check
 			}
-			outcome, findings := evaluateRule(target, policy, rule)
+			outcome, findings := execution.evaluateRule(target, rule)
 			if outcome.limited {
 				r.Issues = append(r.Issues, evidence.Issue{Capability: "evaluation", Path: target.ID, Message: outcome.Reason})
 			}
@@ -286,37 +250,6 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 	})
 	sortIssues(r.Issues)
 	return r
-}
-
-// targetIssues returns the evidence-coverage and assertion issues for a target.
-// History coverage is non-fatal and an unassociated project is allowed.
-func targetIssues(target evidence.Target, policy Policy, request evidence.Request) []evidence.Issue {
-	var issues []evidence.Issue
-	if target.IsVirtualenv() {
-		request = request.ForEnvironment(discovery.KindVenv)
-		for _, rule := range registry {
-			if ruleEnabled(policy, rule.ID) && rule.Available && len(rule.VirtualenvCapabilities) == 0 {
-				issues = append(issues, evidence.Issue{Capability: "evaluation", Path: target.Input, Message: rule.ID + " virtualenv lint is not supported yet"})
-			}
-		}
-	}
-	if target.Kind != policy.Source {
-		issues = append(issues, evidence.Issue{Capability: "evaluation", Path: target.ID, Message: "snapshot target source does not match effective policy"})
-	}
-	if policy.RuntimePrefix != "" && target.RuntimePrefix != policy.RuntimePrefix {
-		issues = append(issues, evidence.Issue{Capability: "runtime-config", Path: target.ID, Message: "asserted runtime prefix was not verified in target evidence"})
-	}
-	if policy.Project != "" && !target.IsVirtualenv() && (target.Project == nil || !target.Project.Associated || target.Project.Path != policy.Project) {
-		issues = append(issues, evidence.Issue{Capability: "project-association", Path: target.ID, Message: "explicit project association was not verified in target evidence"})
-	}
-	for _, capability := range request.Capabilities {
-		if target.Coverage[capability] == evidence.Complete || capability == "history" ||
-			(capability == "project-association" && (target.Project == nil || !target.Project.Associated)) {
-			continue
-		}
-		issues = append(issues, evidence.Issue{Capability: capability, Path: target.ID, Message: "required evidence coverage is not complete"})
-	}
-	return issues
 }
 
 // targetReport builds a read-only projection; arrays and maps are copied so the
@@ -352,35 +285,6 @@ func projectOutcomes(report *Report) {
 // zeroCounts initializes every status so the JSON summary always lists all keys.
 func zeroCounts() map[Status]int {
 	return map[Status]int{Pass: 0, FindingStatus: 0, Unknown: 0, NotApplicable: 0, Disabled: 0, Unavailable: 0, Suppressed: 0}
-}
-
-// evaluateRule runs the general gating shared by all rules, then delegates to
-// the rule's Check. Gating for disabled, unavailable and inapplicable rules
-// never calls Check.
-func evaluateRule(target evidence.Target, policy Policy, rule Rule) (Outcome, []Finding) {
-	outcome := Outcome{RuleID: rule.ID, Target: target.ID, Status: Pass}
-	switch {
-	case !ruleEnabled(policy, rule.ID):
-		outcome.Status = Disabled
-	case !rule.Available:
-		outcome.Status, outcome.Reason = Unavailable, rule.UnavailableReason
-	case !slices.Contains(rule.TargetKinds, target.Kind):
-		outcome.Status, outcome.Reason = NotApplicable, "rule does not apply to this source kind"
-	case target.IsVirtualenv() && len(rule.VirtualenvCapabilities) == 0:
-		outcome.Status, outcome.Reason = Unknown, "virtualenv lint is not supported yet for this rule"
-	case rule.Check == nil:
-		outcome.Status, outcome.Reason = Unknown, "rule has no evaluation entry"
-	default:
-		checked, findings := rule.Check(target, policy.Rules[rule.ID], rule)
-		checked.RuleID, checked.Target = rule.ID, target.ID
-		if len(findings) > 0 {
-			checked.Status = FindingStatus
-		} else if checked.Status == "" {
-			checked.Status = Pass
-		}
-		return checked, findings
-	}
-	return outcome, nil
 }
 
 func applySuppressions(report *Report, now time.Time) {

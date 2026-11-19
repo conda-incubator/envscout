@@ -74,8 +74,6 @@ type Project struct {
 }
 
 type Target struct {
-	// AsOf is the evaluation clock supplied by the rule engine for dated policies.
-	AsOf               time.Time            `json:"-"`
 	ID                 string               `json:"id"`
 	Kind               string               `json:"kind"` // dir or oci-archive
 	Input              string               `json:"input"`
@@ -93,10 +91,8 @@ type Target struct {
 	Project            *Project             `json:"project,omitempty"`
 	Python             []PythonDistribution `json:"python_distributions,omitempty"`
 	Lock               *LockComparison      `json:"lock_comparison,omitempty"`
-	// Peers are supplied by Evaluate for cross-environment checks, not serialized.
-	Peers    []Prefix          `json:"-"`
-	Coverage map[string]string `json:"coverage"`
-	Issues   []Issue           `json:"issues"`
+	Coverage           map[string]string    `json:"coverage"`
+	Issues             []Issue              `json:"issues"`
 }
 
 type Snapshot struct {
