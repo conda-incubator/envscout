@@ -21,20 +21,20 @@ func (c *imageCollector) reference(ref file.Reference) string {
 }
 
 // Adopted hardlinks retain an old opener, not their original inode reference.
-// Even a same-layer lookup is unsafe: duplicate tar paths reuse the reference
-// and replace its opener. The public catalog cannot prove that shared identity.
-func (c *imageCollector) contentReference(ref file.Reference) (file.Reference, error) {
+// A later target-path lookup cannot prove the original shared inode binding,
+// even within the same layer. The public catalog cannot recover that identity.
+func (c *imageCollector) requireContentIdentity(ref file.Reference) error {
 	if err := c.ctx.Err(); err != nil {
-		return ref, err
+		return err
 	}
 	metadata, err := c.loaded.Image.FileCatalog.Get(ref)
 	if err != nil || metadata.FileInfo == nil {
-		return ref, fmt.Errorf("content identity metadata is unavailable")
+		return fmt.Errorf("content identity metadata is unavailable")
 	}
 	if header, ok := metadata.Sys().(*tar.Header); ok && header.Typeflag == tar.TypeLink {
-		return ref, fmt.Errorf("original hardlink content identity is unavailable")
+		return fmt.Errorf("original hardlink content identity is unavailable")
 	}
-	return ref, nil
+	return nil
 }
 
 func (c *imageCollector) cacheRelevantReference(ref file.Reference, roots map[string]bool) bool {

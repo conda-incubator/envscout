@@ -81,7 +81,7 @@ func (c *imageCollector) collectTools(capability string) error {
 			if ref == nil || seen[ref.ID()] {
 				continue
 			}
-			if _, err := c.contentReference(*ref); err != nil {
+			if err := c.requireContentIdentity(*ref); err != nil {
 				if c.ctx.Err() != nil {
 					return c.ctx.Err()
 				}

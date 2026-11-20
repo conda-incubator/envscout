@@ -10,7 +10,6 @@ import (
 	"github.com/anchore/stereoscope/pkg/file"
 	"github.com/anchore/stereoscope/pkg/filetree/filenode"
 	"github.com/conda-incubator/envscout/internal/inventory"
-	gorattler "github.com/conda-incubator/go-rattler"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
@@ -88,7 +87,19 @@ func (c *imageCollector) collectLayers() error {
 				return nil
 			}
 			records++
-			data, err := c.readReference(*node.Reference, imageMetadataLimit, true)
+			var packageName string
+			var valid bool
+			var err error
+			if marker {
+				valid, err = c.indexMarker(*node.Reference)
+			} else {
+				var data []byte
+				data, err = c.readReference(*node.Reference, imageMetadataLimit, true)
+				if err == nil {
+					record, parseErr := inventory.ParseCondaRecord(data)
+					packageName, valid = record.Record.Name, parseErr == nil
+				}
+			}
 			if err != nil {
 				if c.ctx.Err() != nil {
 					return c.ctx.Err()
@@ -96,16 +107,7 @@ func (c *imageCollector) collectLayers() error {
 				c.issue(capability, name, err.Error())
 				return nil
 			}
-			var packageName string
-			var parseErr error
-			if marker {
-				_, parseErr = gorattler.ParseIndexJSON(data)
-			} else {
-				var record inventory.CondaRecord
-				record, parseErr = inventory.ParseCondaRecord(data)
-				packageName = record.Record.Name
-			}
-			if parseErr != nil {
+			if !valid {
 				c.issue(capability, name, "invalid historical conda marker")
 				return nil
 			}
@@ -182,8 +184,7 @@ func (c *imageCollector) collectLayers() error {
 		}
 		if resolution.HasReference() {
 			finalRefs[resolution.ID()] = true
-			content, err := c.contentReference(*resolution.Reference)
-			if err != nil {
+			if err := c.requireContentIdentity(*resolution.Reference); err != nil {
 				if c.ctx.Err() != nil {
 					return c.ctx.Err()
 				}
@@ -193,9 +194,8 @@ func (c *imageCollector) collectLayers() error {
 				}
 				return nil
 			}
-			finalRefs[content.ID()] = true
 			if cacheAncestor(string(p), historicalRoots) == "" {
-				runtimeRefs[content.ID()] = true
+				runtimeRefs[resolution.ID()] = true
 			}
 		}
 		return nil
@@ -226,8 +226,7 @@ func (c *imageCollector) collectLayers() error {
 		if entry.packagePath == "" && !archive {
 			continue
 		}
-		content, err := c.contentReference(entry.ref)
-		if err != nil {
+		if err := c.requireContentIdentity(entry.ref); err != nil {
 			if c.ctx.Err() != nil {
 				return c.ctx.Err()
 			}
@@ -236,8 +235,8 @@ func (c *imageCollector) collectLayers() error {
 		}
 		key := groupKey{entry.layer, entry.packagePath}
 		group := groups[key]
-		group.runtime = group.runtime || !finalComplete || runtimeRefs[content.ID()]
-		if finalRefs[content.ID()] {
+		group.runtime = group.runtime || !finalComplete || runtimeRefs[entry.ref.ID()]
+		if finalRefs[entry.ref.ID()] {
 			if entry.packagePath != "" {
 				groups[key] = group
 			}

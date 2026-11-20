@@ -90,6 +90,8 @@ The pure [ownership index](../internal/inventory/ownership.go) records caller-ad
 
 [Host Python metadata classification](../internal/evidence/host_python.go) shares the container-to-primary filename decision, not one admission policy. Exact primary-file presence, lowercase identity-gap checks, virtualenv-only missing-primary issues and direct supporting-file cataloging remain distinct.
 
+Image collection borrows a fully loaded image whose catalog and backing content stay stable until collection finishes. A collector-local [marker-validity memo](../internal/evidence/image.go) retains at most 10,000 reference-ID-to-boolean outcomes from completed bounded index-marker reads, including invalid parses but not read errors or raw bytes. At capacity it reads new references without retaining them. Each consumer still owns admission, limits and diagnostics; historical marker timing remains layer-specific. The [content-identity guard](../internal/evidence/image_links.go) remains separate: marker validity does not prove an adopted hardlink's original shared inode identity.
+
 ## Lint rule extension
 
 Rules are compiled-in Go checks, not runtime plugins. The [registry](../internal/lint/registry.go) defines stable IDs/versions, descriptions, sources, capabilities, profile defaults, recommendations and exceptions. Configuration adjusts registered rules; `--list-rules` uses this registry.
