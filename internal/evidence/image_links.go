@@ -80,28 +80,53 @@ func (c *imageCollector) resolve(p string) (*file.Resolution, error) {
 // Resolve just their path via exact image nodes, then verify descendant refs
 // using File. This never opens a host path or trusts a textual destination alone.
 func (c *imageCollector) resolvedPath(p string) (string, error) {
+	resolved, _, err := c.walkImagePath(p, imagePathResolution, nil)
+	return resolved, err
+}
+
+func (c *imageCollector) cacheRelevantPath(p string, roots map[string]bool) bool {
+	_, relevant, _ := c.walkImagePath(p, imagePathCacheRelevance, roots)
+	return relevant
+}
+
+type imagePathPolicy uint8
+
+const (
+	imagePathResolution imagePathPolicy = iota
+	imagePathCacheRelevance
+)
+
+// Relevance checks roots before node existence and follows even empty link
+// destinations. Resolution instead requires every component and a nonempty link.
+func (c *imageCollector) walkImagePath(p string, policy imagePathPolicy, roots map[string]bool) (string, bool, error) {
 	p = path.Clean(p)
 	for depth := 0; depth < 128; depth++ {
 		if err := c.ctx.Err(); err != nil {
-			return "", err
+			return "", policy == imagePathCacheRelevance, err
 		}
 		parts := strings.Split(strings.TrimPrefix(p, "/"), "/")
 		current, changed := "", false
 		for index, part := range parts {
 			if err := c.ctx.Err(); err != nil {
-				return "", err
+				return "", policy == imagePathCacheRelevance, err
 			}
 			current += "/" + part
+			if policy == imagePathCacheRelevance && roots[current] {
+				return "", true, nil
+			}
 			raw := c.tree.TreeReader().Node(filenode.IDByPath(file.Path(current)))
 			node, ok := raw.(*filenode.FileNode)
 			if !ok {
-				return "", fmt.Errorf("image-local target is missing")
+				if policy == imagePathCacheRelevance {
+					return "", false, nil
+				}
+				return "", false, fmt.Errorf("image-local target is missing")
 			}
 			if !node.IsLink() {
 				continue
 			}
-			if node.LinkPath == "" {
-				return "", fmt.Errorf("image-local link is malformed")
+			if policy == imagePathResolution && node.LinkPath == "" {
+				return "", false, fmt.Errorf("image-local link is malformed")
 			}
 			destination := string(node.LinkPath)
 			if !path.IsAbs(destination) {
@@ -112,47 +137,11 @@ func (c *imageCollector) resolvedPath(p string) (string, error) {
 			break
 		}
 		if !changed {
-			return p, nil
+			return p, false, nil
 		}
 	}
-	return "", fmt.Errorf("image-local link resolution limit exceeded")
-}
-
-func (c *imageCollector) cacheRelevantPath(p string, roots map[string]bool) bool {
-	p = path.Clean(p)
-	for depth := 0; depth < 128; depth++ {
-		if c.ctx.Err() != nil {
-			return true
-		}
-		parts := strings.Split(strings.TrimPrefix(p, "/"), "/")
-		current, changed := "", false
-		for index, part := range parts {
-			if c.ctx.Err() != nil {
-				return true
-			}
-			current += "/" + part
-			if roots[current] {
-				return true
-			}
-			raw := c.tree.TreeReader().Node(filenode.IDByPath(file.Path(current)))
-			node, ok := raw.(*filenode.FileNode)
-			if !ok {
-				return false
-			}
-			if !node.IsLink() {
-				continue
-			}
-			destination := string(node.LinkPath)
-			if !path.IsAbs(destination) {
-				destination = path.Join(path.Dir(current), destination)
-			}
-			p = path.Join(destination, strings.Join(parts[index+1:], "/"))
-			changed = true
-			break
-		}
-		if !changed {
-			return false
-		}
+	if policy == imagePathCacheRelevance {
+		return "", false, nil
 	}
-	return false
+	return "", false, fmt.Errorf("image-local link resolution limit exceeded")
 }
