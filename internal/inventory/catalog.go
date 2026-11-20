@@ -17,15 +17,11 @@ import (
 	"github.com/anchore/syft/syft/source"
 )
 
-// Catalog runs offline Syft cataloging over src and returns the SBOM. It never closes src:
+// catalog runs offline Syft cataloging over src and returns the SBOM. It never closes src:
 // callers that own the source must close it, and callers that borrow it (such as an image
 // owned by the caller) must not. The conda-meta cataloger is added explicitly because Syft
 // v1.54 tags it for directories only. Remote lookups and host caches are disabled.
-func Catalog(ctx context.Context, src source.Source) (*sbom.SBOM, error) {
-	return catalog(ctx, src, true)
-}
-
-// catalog runs Catalog with the conda-meta cataloger included only when withConda is set.
+// The conda-meta cataloger is included only when withConda is set.
 // Virtualenvs pass false so conda-meta records inside them are never counted as packages.
 func catalog(ctx context.Context, src source.Source, withConda bool) (*sbom.SBOM, error) {
 	if err := ctx.Err(); err != nil {

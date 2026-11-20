@@ -31,11 +31,6 @@ func (ctx *imageResolutionContractContext) Err() error {
 	return ctx.states[min(ctx.calls-1, len(ctx.states)-1)]
 }
 
-// Only the scalar consumed by callers is frozen, not the resolution chain.
-func imageResolutionContractResolve(c *imageCollector, p string) (*file.Reference, error) {
-	return c.resolveReference(p)
-}
-
 func assertImageResolutionContract(t *testing.T, got, want *file.Reference, err error, message string) {
 	t.Helper()
 	if (got == nil) != (want == nil) || got != nil && (got.ID() != want.ID() || got.RealPath != want.RealPath) {
@@ -98,7 +93,7 @@ func TestImageResolutionContractScalars(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for pass := 0; pass < 2; pass++ {
-				got, err := imageResolutionContractResolve(&c, tc.path)
+				got, err := c.resolveReference(tc.path)
 				assertImageResolutionContract(t, got, tc.ref, err, tc.message)
 			}
 		})
@@ -137,7 +132,7 @@ func TestImageResolutionContractContextCheckpoints(t *testing.T) {
 			if tc.checks == 1 {
 				c.tree = nil // Pre-cancellation must not require a tree.
 			}
-			got, err := imageResolutionContractResolve(&c, tc.path)
+			got, err := c.resolveReference(tc.path)
 			assertImageResolutionContract(t, got, tc.ref, err, tc.message)
 			if ctx.calls != tc.checks || tc.cause != nil && !errors.Is(err, tc.cause) {
 				t.Fatalf("Err calls = %d; want %d, cause = %v", ctx.calls, tc.checks, err)
@@ -154,13 +149,13 @@ func TestImageResolutionContractLastCheckpoint(t *testing.T) {
 	}
 	ctx := &imageResolutionContractContext{Context: context.Background(), t: t, states: []error{nil, nil, context.Canceled}, budget: 2}
 	c := imageCollector{ctx: ctx, tree: tree}
-	got, err := imageResolutionContractResolve(&c, "/file")
+	got, err := c.resolveReference("/file")
 	assertImageResolutionContract(t, got, regular, err, "")
 	if ctx.calls != 2 {
 		t.Fatalf("successful Err calls = %d; want 2", ctx.calls)
 	}
 	ctx.budget = 3
-	got, err = imageResolutionContractResolve(&c, "/file")
+	got, err = c.resolveReference("/file")
 	assertImageResolutionContract(t, got, nil, err, "context canceled")
 	if ctx.calls != 3 || !errors.Is(err, context.Canceled) {
 		t.Fatalf("next-call Err calls = %d; want 3, cause = %v", ctx.calls, err)

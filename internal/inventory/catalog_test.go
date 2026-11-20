@@ -67,7 +67,7 @@ func TestCatalogKeepsPythonComplianceDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = src.Close() })
-	bom, err := Catalog(context.Background(), src)
+	bom, err := catalog(context.Background(), src, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestOfflineConfigMakesNoRemoteRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = src.Close() }()
-	bom, err := Catalog(context.Background(), src)
+	bom, err := catalog(context.Background(), src, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestCatalogCanceledBeforeScan(t *testing.T) {
 	defer func() { _ = src.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Catalog(ctx, src); !errors.Is(err, context.Canceled) {
+	if _, err := catalog(ctx, src, true); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation, got %v", err)
 	}
 }
@@ -234,7 +234,9 @@ func TestCondaRecordsCanceledReturnsNoRecords(t *testing.T) {
 }
 
 func TestWriteEnvironmentInvalidRecordIsIncomplete(t *testing.T) {
-	prefix := condaFixtureDir(t, `{"name":"","version":"1","build":"0"}`)
+	prefix := condaFixture(t, map[string]string{
+		"record-0-0.json": `{"name":"","version":"1","build":"0"}`,
+	})
 	env := discovery.Environment{Name: "sample", Path: prefix, Kind: discovery.KindConda}
 	result, err := WriteEnvironment(context.Background(), env, t.TempDir())
 	if err != nil {
@@ -271,13 +273,15 @@ func TestWriteImageInvalidRecordIsIncomplete(t *testing.T) {
 }
 
 func TestCatalogDropsInvalidRecordAndKeepsSBOM(t *testing.T) {
-	prefix := condaFixtureDir(t, `{"name":"","version":"1","build":"0"}`)
+	prefix := condaFixture(t, map[string]string{
+		"record-0-0.json": `{"name":"","version":"1","build":"0"}`,
+	})
 	src, err := directorysource.NewFromPath(prefix)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = src.Close() }()
-	bom, err := Catalog(context.Background(), src)
+	bom, err := catalog(context.Background(), src, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,16 +293,4 @@ func TestCatalogDropsInvalidRecordAndKeepsSBOM(t *testing.T) {
 			t.Fatalf("unknown reason = %v", reasons)
 		}
 	}
-}
-
-func condaFixtureDir(t *testing.T, body string) string {
-	t.Helper()
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "conda-meta"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "conda-meta", "record-0-0.json"), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return root
 }

@@ -86,6 +86,8 @@ The flowchart omits detailed failure and cancellation branches. Arrows show poss
 
 [`ParseCondaRecord`](../internal/inventory/records.go) parses original document bytes and preserves ownership omission versus an explicitly empty list. Readers own file admission, bounds and source attribution: host records use confined reads directly, final image records retain the Syft resolver path, and historical installed records retain their layer-reference reads and limits. Historical cache index markers still use their separate index parser. The host Python metadata resolver remains separate.
 
+Offline SBOM tests use the same conda-enabled catalog path as the writer; project tests use the context-aware collector directly. Fixture helpers share file-creation mechanics only where paths, bytes and modes are identical. Sparse SBOM records, canonical installed records, cache index markers and ownership omission/empty cases remain distinct inputs, not one universal fixture schema.
+
 The pure [ownership index](../internal/inventory/ownership.go) records caller-admitted path claims and sticky ambiguity; the host collector still localizes paths, checks its metadata index and reports ownership gaps. The [history parser](../internal/discovery/history.go) counts transaction headers from a reader, while discovery retains cancellation, total-byte bounds and confined file access.
 
 [Host Python metadata classification](../internal/evidence/host_python.go) shares the container-to-primary filename decision, not one admission policy. Exact primary-file presence, lowercase identity-gap checks, virtualenv-only missing-primary issues and direct supporting-file cataloging remain distinct.

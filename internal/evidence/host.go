@@ -422,10 +422,6 @@ func readHostCondaRecord(ctx context.Context, root *os.Root, name, filename stri
 
 // The association is supplied by the caller. Presence of a lock is not proof of
 // manifest or installation synchronization; those require separate verifiers.
-func collectProject(input string) (*Project, *Issue, error) {
-	return collectProjectContext(context.Background(), input)
-}
-
 func collectProjectContext(ctx context.Context, input string) (*Project, *Issue, error) {
 	abs, err := filepath.Abs(input)
 	if err != nil {
