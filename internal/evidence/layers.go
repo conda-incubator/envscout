@@ -9,7 +9,7 @@ import (
 
 	"github.com/anchore/stereoscope/pkg/file"
 	"github.com/anchore/stereoscope/pkg/filetree/filenode"
-	gorattler "github.com/conda-incubator/go-rattler"
+	"github.com/conda-incubator/envscout/internal/inventory"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
@@ -34,7 +34,7 @@ func cacheAncestor(p string, roots map[string]bool) string {
 // Historical trees contain diff entries, not runtime visibility. Keep their
 // reference identities until all confirmed cache contexts and final links are known.
 func (c *imageCollector) collectLayers() error {
-	const capability = "layer-retention"
+	const capability = CapLayerRetention
 	// Compressed descriptors come only from the raw manifest. Stereoscope's
 	// Layer.Metadata.Digest is the uncompressed diffID and its Size is often zero.
 	var manifest v1.Manifest
@@ -87,7 +87,19 @@ func (c *imageCollector) collectLayers() error {
 				return nil
 			}
 			records++
-			data, err := c.readReference(*node.Reference, imageMetadataLimit, true)
+			var packageName string
+			var valid bool
+			var err error
+			if marker {
+				valid, err = c.indexMarker(*node.Reference)
+			} else {
+				var data []byte
+				data, err = c.readReference(*node.Reference, imageMetadataLimit, true)
+				if err == nil {
+					record, parseErr := inventory.ParseCondaRecord(data)
+					packageName, valid = record.Record.Name, parseErr == nil
+				}
+			}
 			if err != nil {
 				if c.ctx.Err() != nil {
 					return c.ctx.Err()
@@ -95,16 +107,7 @@ func (c *imageCollector) collectLayers() error {
 				c.issue(capability, name, err.Error())
 				return nil
 			}
-			var packageName string
-			var parseErr error
-			if marker {
-				_, parseErr = gorattler.ParseIndexJSON(data)
-			} else {
-				var record gorattler.PrefixRecord
-				record, parseErr = gorattler.ParsePrefixRecord(data)
-				packageName = record.Name
-			}
-			if parseErr != nil {
+			if !valid {
 				c.issue(capability, name, "invalid historical conda marker")
 				return nil
 			}
@@ -168,7 +171,7 @@ func (c *imageCollector) collectLayers() error {
 		if node.FileType == file.TypeDirectory {
 			return nil
 		}
-		resolution, err := c.resolve(string(p))
+		ref, err := c.resolveReference(string(p))
 		if err != nil {
 			if c.ctx.Err() != nil {
 				return c.ctx.Err()
@@ -179,22 +182,20 @@ func (c *imageCollector) collectLayers() error {
 			}
 			return nil
 		}
-		if resolution.HasReference() {
-			finalRefs[resolution.ID()] = true
-			content, err := c.contentReference(*resolution.Reference)
-			if err != nil {
+		if ref != nil {
+			finalRefs[ref.ID()] = true
+			if err := c.requireContentIdentity(*ref); err != nil {
 				if c.ctx.Err() != nil {
 					return c.ctx.Err()
 				}
-				if c.cacheRelevantReference(*resolution.Reference, historicalRoots) {
+				if c.cacheRelevantReference(*ref, historicalRoots) {
 					c.issue(capability, string(p), err.Error())
 					finalComplete = false
 				}
 				return nil
 			}
-			finalRefs[content.ID()] = true
 			if cacheAncestor(string(p), historicalRoots) == "" {
-				runtimeRefs[content.ID()] = true
+				runtimeRefs[ref.ID()] = true
 			}
 		}
 		return nil
@@ -225,8 +226,7 @@ func (c *imageCollector) collectLayers() error {
 		if entry.packagePath == "" && !archive {
 			continue
 		}
-		content, err := c.contentReference(entry.ref)
-		if err != nil {
+		if err := c.requireContentIdentity(entry.ref); err != nil {
 			if c.ctx.Err() != nil {
 				return c.ctx.Err()
 			}
@@ -235,8 +235,8 @@ func (c *imageCollector) collectLayers() error {
 		}
 		key := groupKey{entry.layer, entry.packagePath}
 		group := groups[key]
-		group.runtime = group.runtime || !finalComplete || runtimeRefs[content.ID()]
-		if finalRefs[content.ID()] {
+		group.runtime = group.runtime || !finalComplete || runtimeRefs[entry.ref.ID()]
+		if finalRefs[entry.ref.ID()] {
 			if entry.packagePath != "" {
 				groups[key] = group
 			}

@@ -47,9 +47,9 @@ func validatePixiLock(data []byte) error {
 func collectHostPixi(ctx context.Context, target *Target, prefix Prefix, req Request) {
 	root, err := os.OpenRoot(prefix.Path)
 	if err != nil {
-		if Requested(req, "installed-lock") {
+		if Requested(req, CapInstalledLock) {
 			target.Lock = &LockComparison{Prefix: prefix.Path, Reason: "Pixi marker filesystem unavailable"}
-			hostIssue(target, "installed-lock", prefix.Path, target.Lock.Reason, err)
+			hostIssue(target, CapInstalledLock, prefix.Path, target.Lock.Reason, err)
 		}
 		return
 	}
@@ -61,9 +61,9 @@ func collectHostPixi(ctx context.Context, target *Target, prefix Prefix, req Req
 	comparison := &LockComparison{Prefix: prefix.Path}
 	unknown := func(reason, path string, causes ...error) {
 		comparison.Reason = reason
-		if Requested(req, "installed-lock") {
+		if Requested(req, CapInstalledLock) {
 			target.Lock = comparison
-			hostIssue(target, "installed-lock", path, reason, causes...)
+			hostIssue(target, CapInstalledLock, path, reason, causes...)
 		}
 	}
 	if err != nil {
@@ -84,7 +84,7 @@ func collectHostPixi(ctx context.Context, target *Target, prefix Prefix, req Req
 			return
 		}
 	}
-	if !Requested(req, "installed-lock") {
+	if !Requested(req, CapInstalledLock) {
 		return
 	}
 	target.Lock = comparison
@@ -122,6 +122,6 @@ func collectHostPixi(ctx context.Context, target *Target, prefix Prefix, req Req
 	comparison.Report = &report
 	comparison.Reason = "installed conda metadata comparison only; PyPI, installed files, and manifest freshness are not verified"
 	if !report.Complete {
-		hostIssue(target, "installed-lock", comparison.Path, "selected installed-lock comparison includes unknown metadata")
+		hostIssue(target, CapInstalledLock, comparison.Path, "selected installed-lock comparison includes unknown metadata")
 	}
 }

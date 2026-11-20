@@ -133,7 +133,7 @@ func TestBuildPolicyPrecedenceAndSelection(t *testing.T) {
 	config = Policy{Rules: map[string]RuleOptions{"ENV011": {Enabled: engineBool(true)}}}
 	for _, options := range []Options{{Rules: []string{"ENV001"}}, {DisableRules: []string{"ENV011"}}} {
 		p, err := BuildPolicy(config, options)
-		if err != nil || ruleEnabled(p, "ENV011") {
+		if err != nil || executionFromPolicy(p).rules["ENV011"].enabled {
 			t.Fatalf("explicit CLI precedence failed: %+v %v", p, err)
 		}
 	}
@@ -254,7 +254,7 @@ func engineHasOutcome(report Report, rule string) bool {
 
 func TestInstalledLockRuleIsAvailableButNeedsSelection(t *testing.T) {
 	policy := enginePolicy(t, "dir", "local", "ENV010")
-	if !slices.Contains(Requirements(policy).Capabilities, "installed-lock") || !ruleEnabled(policy, "ENV010") {
+	if !slices.Contains(Requirements(policy).Capabilities, "installed-lock") || !executionFromPolicy(policy).rules["ENV010"].enabled {
 		t.Fatalf("installed-lock check not available: %+v", Requirements(policy))
 	}
 	for _, coverage := range []string{evidence.Complete, evidence.Partial, evidence.NotCollected} {
@@ -822,8 +822,6 @@ func TestEvaluateSuppliesCrossTargetPeersAndAsOfWithoutMutation(t *testing.T) {
 		left.ID, right.ID = "file:///left", "file:///right"
 		left.Prefixes = []evidence.Prefix{{Path: "/left", Revision: engineInt(10)}}
 		right.Prefixes = []evidence.Prefix{{Path: "/right/b", Revision: engineInt(11)}, {Path: "/right/a", Revision: engineInt(12)}}
-		left.AsOf, right.AsOf = engineNow.Add(-time.Hour), engineNow.Add(time.Hour)
-		left.Peers, right.Peers = []evidence.Prefix{{Path: "/stale/left"}}, []evidence.Prefix{{Path: "/stale/right"}}
 		return evidence.Snapshot{Started: engineNow, Targets: []evidence.Target{right, left}}
 	}
 	snapshot, before := makeSnapshot(), makeSnapshot()
@@ -831,20 +829,22 @@ func TestEvaluateSuppliesCrossTargetPeersAndAsOfWithoutMutation(t *testing.T) {
 	original := registry[index]
 	t.Cleanup(func() { registry[index] = original })
 	calls := 0
-	registry[index].Check = func(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
-		calls++
-		if !target.AsOf.Equal(engineNow) {
-			t.Errorf("callback clock = %s, want explicit evaluation time %s", target.AsOf, engineNow)
+	registry[index].prepare = func(context evaluationContext) func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding) {
+		if !context.now.Equal(engineNow) {
+			t.Errorf("callback clock = %s, want explicit evaluation time %s", context.now, engineNow)
 		}
-		paths := make([]string, 0, len(target.Peers))
-		for _, peer := range target.Peers {
+		paths := make([]string, 0, len(context.peers))
+		for _, peer := range context.peers {
 			paths = append(paths, peer.Path)
 		}
 		slices.Sort(paths)
 		if !slices.Equal(paths, []string{"/left", "/right/a", "/right/b"}) {
 			t.Errorf("callback missing cross-target peers or retained stale peers: %v", paths)
 		}
-		return original.Check(target, opts, rule)
+		return func(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
+			calls++
+			return original.Check(target, opts, rule)
+		}
 	}
 	first := Evaluate(snapshot, policy, engineNow)
 	if !reflect.DeepEqual(snapshot, before) {

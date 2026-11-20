@@ -14,16 +14,8 @@ import (
 func hostPrefix(t *testing.T) string {
 	t.Helper()
 	prefix := filepath.Join(t.TempDir(), "env")
-	meta := filepath.Join(prefix, "conda-meta")
-	if err := os.MkdirAll(meta, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(meta, "pkg.json"), []byte(hostRecordJSON("demo", "")), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(meta, "history"), []byte("==> initial <==\n==> update <==\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeMeta(t, prefix, "pkg.json", hostRecordJSON("demo", ""))
+	writeMeta(t, prefix, "history", "==> initial <==\n==> update <==\n")
 	return prefix
 }
 

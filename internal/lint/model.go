@@ -98,14 +98,14 @@ type Rule struct {
 	Fix               string                 `json:"recommendation,omitempty"`
 	References        []string               `json:"references"`
 	Exceptions        []string               `json:"known_exceptions"`
-	// A nil VirtualenvCapabilities means this rule is not yet supported for venvs.
+	// Empty VirtualenvCapabilities means this rule is not yet supported for venvs.
 	VirtualenvCapabilities []string `json:"virtualenv_capabilities,omitempty"`
 	// SupportsRevisionThreshold is true only for rules whose option set accepts a revision threshold.
 	SupportsRevisionThreshold bool `json:"-"`
 	// Check returns the rule's observation; the engine supplies target/ID/status.
 	Check func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding) `json:"-"`
 	// prepare optionally shares immutable per-evaluation facts across target checks.
-	prepare func([]evidence.Prefix) func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding)
+	prepare func(evaluationContext) func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding)
 }
 
 type Outcome struct {

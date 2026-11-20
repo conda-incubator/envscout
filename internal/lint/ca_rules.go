@@ -2,10 +2,8 @@ package lint
 
 import (
 	"fmt"
-	"net/url"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/conda-incubator/envscout/internal/evidence"
@@ -15,18 +13,14 @@ import (
 // Minimums are the distribution recommendations verified on 2026-10-26, not
 // universal vulnerability ranges. certifi 2026.10.18 already fixes the incident.
 func caPackageMinimum(record gorattler.PrefixRecord) (minimum, channel string) {
-	canonical, valid := localChannel(record)
+	facts, valid := condaChannelFacts(record)
 	if !valid {
 		return "", ""
 	}
-	u, err := url.Parse(canonical)
-	if err != nil {
-		return "", ""
-	}
-	switch {
-	case strings.EqualFold(u.Host, "conda.anaconda.org") && u.Path == "/conda-forge/":
+	switch facts.family {
+	case channelForge:
 		channel = "conda-forge"
-	case strings.EqualFold(u.Host, "repo.anaconda.com") && u.Path == "/pkgs/main/":
+	case channelDefaultsMain:
 		channel = "defaults"
 	default:
 		return "", ""
@@ -108,7 +102,7 @@ func checkCAPackages(target evidence.Target, opts RuleOptions, rule Rule) (Outco
 
 func checkVirtualenvCertifi(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
 	outcome := Outcome{Status: Pass}
-	if !completeOf(target, "prefixes") || !completeOf(target, "python-distributions") {
+	if !completeOf(target, evidence.CapPrefixes) || !completeOf(target, evidence.CapPythonDistributions) {
 		outcome.Status, outcome.Reason = Unknown, "virtualenv discovery or installed Python metadata coverage is incomplete"
 	}
 	prefix := target.Prefixes[0]

@@ -2,7 +2,6 @@ package lint
 
 import (
 	"fmt"
-	"net/url"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -20,7 +19,7 @@ import (
 // package can support a positive finding even when another prefix was unreadable.
 func localRecordOutcome(target evidence.Target) Outcome {
 	outcome := Outcome{Status: Pass, SubjectCount: len(target.Prefixes)}
-	if !completeOf(target, "prefixes") || !completeOf(target, "conda-records") {
+	if !completeOf(target, evidence.CapPrefixes) || !completeOf(target, evidence.CapCondaRecords) {
 		outcome.Status, outcome.Reason = Unknown, "prefix discovery or conda record coverage is incomplete"
 	}
 	for _, prefix := range target.Prefixes {
@@ -87,7 +86,7 @@ func checkPipInstalled(target evidence.Target, opts RuleOptions, rule Rule) (Out
 	if outcome.Status == NotApplicable {
 		return outcome, nil
 	}
-	if !completeOf(target, "python-distributions") || (target.Coverage["conda-records"] != evidence.Complete && target.Coverage["conda-records"] != evidence.Partial) {
+	if !completeOf(target, evidence.CapPythonDistributions) || (target.Coverage[evidence.CapCondaRecords] != evidence.Complete && target.Coverage[evidence.CapCondaRecords] != evidence.Partial) {
 		outcome.Status, outcome.Reason = Unknown, "complete conda ownership and Python distribution metadata are required to establish absence of an owner"
 		return outcome, nil
 	}
@@ -148,7 +147,7 @@ func checkPipShadows(target evidence.Target, opts RuleOptions, rule Rule) (Outco
 	if outcome.Status == NotApplicable {
 		return outcome, nil
 	}
-	if !completeOf(target, "python-distributions") {
+	if !completeOf(target, evidence.CapPythonDistributions) {
 		outcome.Status, outcome.Reason = Unknown, "Python distribution coverage is incomplete"
 	}
 	var findings []Finding
@@ -212,7 +211,7 @@ func checkPipShadows(target evidence.Target, opts RuleOptions, rule Rule) (Outco
 			}
 		}
 		// An orphan is established only after every conda ownership record was read.
-		if !ownershipComplete || !completeOf(target, "conda-records") || !completeOf(target, "python-distributions") {
+		if !ownershipComplete || !completeOf(target, evidence.CapCondaRecords) || !completeOf(target, evidence.CapPythonDistributions) {
 			continue
 		}
 		for _, orphan := range orphans {
@@ -334,24 +333,6 @@ func checkWorkingBase(target evidence.Target, opts RuleOptions, rule Rule) (Outc
 	return outcome, findings
 }
 
-// CanonicalChannel redacts secrets. Remove only the record's explicit subdir,
-// not an arbitrary suffix that happens to resemble a known channel name.
-func localChannel(record gorattler.PrefixRecord) (string, bool) {
-	channel, err := gorattler.CanonicalChannel(record.Channel)
-	if err != nil {
-		return "", false
-	}
-	u, err := url.Parse(channel)
-	if err != nil {
-		return "", false
-	}
-	if record.Subdir != "" {
-		u.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), "/"+record.Subdir)
-	}
-	u.Path = strings.TrimSuffix(u.Path, "/") + "/"
-	return u.String(), true
-}
-
 func checkMixedChannels(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
 	outcome := localRecordOutcome(target)
 	if outcome.Status == NotApplicable {
@@ -361,16 +342,15 @@ func checkMixedChannels(target evidence.Target, opts RuleOptions, rule Rule) (Ou
 	for _, prefix := range sortedLocalPrefixes(target) {
 		var defaults, forge []string
 		for _, located := range prefix.Records {
-			channel, valid := localChannel(located.Record)
+			channel, valid := condaChannelFacts(located.Record)
 			if !valid {
 				outcome.Status, outcome.Reason = Unknown, "a channel is unavailable or cannot be canonicalized; custom aliases and the defaults multichannel are not expanded"
 				continue
 			}
-			u, _ := url.Parse(channel)
-			switch {
-			case strings.EqualFold(u.Host, "repo.anaconda.com") && (u.Path == "/pkgs/main/" || u.Path == "/pkgs/r/" || u.Path == "/pkgs/msys2/"):
+			switch channel.family {
+			case channelDefaultsMain, channelDefaultsR, channelDefaultsMSYS:
 				defaults = append(defaults, located.Path)
-			case strings.EqualFold(u.Host, "conda.anaconda.org") && u.Path == "/conda-forge/":
+			case channelForge:
 				forge = append(forge, located.Path)
 			}
 		}
@@ -389,7 +369,7 @@ func checkMixedChannels(target evidence.Target, opts RuleOptions, rule Rule) (Ou
 
 func checkHostCache(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
 	outcome := Outcome{Status: Pass, SubjectCount: 1}
-	if !completeOf(target, "host-cache") {
+	if !completeOf(target, evidence.CapHostCache) {
 		outcome.Status, outcome.Reason = Unknown, "host package-cache coverage is incomplete"
 	}
 	artifacts := append(slices.Clone(target.Archives), target.Extracted...)
@@ -397,7 +377,7 @@ func checkHostCache(target evidence.Target, opts RuleOptions, rule Rule) (Outcom
 		artifacts[i].Bytes = 0 // Extracted payloads are not traversed by host lint.
 	}
 	if len(artifacts) == 0 {
-		if len(target.Prefixes) == 0 && outcome.Status == Pass && completeOf(target, "prefixes") {
+		if len(target.Prefixes) == 0 && outcome.Status == Pass && completeOf(target, evidence.CapPrefixes) {
 			outcome.Status, outcome.Reason = NotApplicable, "no conda environment or record-derived cache was found"
 		}
 		return outcome, nil
@@ -444,12 +424,18 @@ func pythonSupportStatus(version string, asOf time.Time) (branch, date string, e
 	return "", "", false, false
 }
 
-func checkPythonEOL(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
+func preparePythonEOL(context evaluationContext) func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding) {
+	return func(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
+		return checkPythonEOLAt(target, opts, rule, context.now)
+	}
+}
+
+func checkPythonEOLAt(target evidence.Target, opts RuleOptions, rule Rule, now time.Time) (Outcome, []Finding) {
 	outcome := localRecordOutcome(target)
 	if outcome.Status == NotApplicable {
 		return outcome, nil
 	}
-	if target.AsOf.IsZero() {
+	if now.IsZero() {
 		outcome.Status, outcome.Reason = Unknown, "an explicit evaluation date is required for Python support status"
 		return outcome, nil
 	}
@@ -466,7 +452,7 @@ func checkPythonEOL(target evidence.Target, opts RuleOptions, rule Rule) (Outcom
 				continue
 			}
 			pythonCount++
-			branch, date, ended, known := pythonSupportStatus(located.Record.Version, target.AsOf)
+			branch, date, ended, known := pythonSupportStatus(located.Record.Version, now)
 			if !known {
 				outcome.Status, outcome.Reason = Unknown, "Python version is invalid, unlisted or beyond a scheduled support date; refresh the official status table"
 				continue
@@ -476,7 +462,7 @@ func checkPythonEOL(target evidence.Target, opts RuleOptions, rule Rule) (Outcom
 			}
 			f := newFinding(target, rule, opts.Severity, []string{prefix.Path, located.Path}, nil)
 			f.Evidence.Count = 1
-			f.Message = fmt.Sprintf("Python %s in `%s`, recorded at `%s`, belongs to branch %s whose upstream CPython support ended %s (evaluated %s). %s", located.Record.Version, prefix.Path, located.Path, branch, date, target.AsOf.UTC().Format(time.DateOnly), rule.Description)
+			f.Message = fmt.Sprintf("Python %s in `%s`, recorded at `%s`, belongs to branch %s whose upstream CPython support ended %s (evaluated %s). %s", located.Record.Version, prefix.Path, located.Path, branch, date, now.UTC().Format(time.DateOnly), rule.Description)
 			findings = append(findings, f)
 		}
 	}
@@ -490,7 +476,7 @@ func checkInstalledLock(target evidence.Target, opts RuleOptions, rule Rule) (Ou
 	outcome := Outcome{Status: Pass, SubjectCount: 1}
 	selection := target.Lock
 	if selection == nil {
-		if completeOf(target, "installed-lock") {
+		if completeOf(target, evidence.CapInstalledLock) {
 			outcome.Status, outcome.Reason = NotApplicable, "no installed Pixi lock association was selected"
 		} else {
 			outcome.Status, outcome.Reason = Unknown, "installed lock selection was not completely inspected"
@@ -502,7 +488,7 @@ func checkInstalledLock(target evidence.Target, opts RuleOptions, rule Rule) (Ou
 		return outcome, nil
 	}
 	report := selection.Report
-	if !report.Complete || len(report.Unknown) > 0 || !completeOf(target, "installed-lock") {
+	if !report.Complete || len(report.Unknown) > 0 || !completeOf(target, evidence.CapInstalledLock) {
 		outcome.Status, outcome.Reason = Unknown, "installed conda metadata comparison has incomplete evidence or unresolved identities"
 	}
 	count := len(report.Missing) + len(report.Extra) + len(report.Changed)

@@ -23,8 +23,10 @@ func localRecord(name, version string) inventory.CondaRecord {
 	}}
 }
 
+var localNow = time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+
 func localTarget(records ...inventory.CondaRecord) evidence.Target {
-	return evidence.Target{ID: "local", Kind: "dir", AsOf: time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC),
+	return evidence.Target{ID: "local", Kind: "dir",
 		Prefixes: []evidence.Prefix{{Path: "/env", Records: records, RecordCoverage: evidence.Complete}},
 		Coverage: map[string]string{"prefixes": evidence.Complete, "conda-records": evidence.Complete,
 			"python-distributions": evidence.Complete, "host-cache": evidence.Complete, "installed-lock": evidence.Complete}}
@@ -152,7 +154,7 @@ func TestPythonConflictEvaluationStopsBeforeCartesianExplosion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := Evaluate(evidence.Snapshot{Targets: []evidence.Target{target}}, policy, target.AsOf)
+	report := Evaluate(evidence.Snapshot{Targets: []evidence.Target{target}}, policy, localNow)
 	if report.Status != "incomplete" || len(report.Findings) > MaxFindings {
 		t.Fatalf("a limited evaluation cannot claim completeness: %+v", report)
 	}
@@ -188,7 +190,7 @@ func TestStaticRuleLimitsLiveInCatalogueNotEveryFinding(t *testing.T) {
 	for _, test := range []struct {
 		id    string
 		check func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding)
-	}{{"ENV003", checkPipInstalled}, {"ENV009", checkPythonEOL}} {
+	}{{"ENV003", checkPipInstalled}, {"ENV009", preparePythonEOL(evaluationContext{})}} {
 		_, findings := runLocalCheck(target, test.id, test.check)
 		if len(findings) == 0 || len(findings[0].Evidence.Notes) != 0 {
 			t.Fatalf("%s static limitations belong to --list-rules, not per-instance notes: %+v", test.id, findings)
@@ -200,13 +202,21 @@ func TestStaticRuleLimitsLiveInCatalogueNotEveryFinding(t *testing.T) {
 	}
 }
 
-func runLocalCheck(target evidence.Target, id string, check func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding)) (Outcome, []Finding) {
-	rule := Rule{ID: id, Available: true, TargetKinds: []string{"dir"}, Check: check}
-	if registered, ok := LookupRule(id); ok {
-		rule = registered
+func runLocalCheck(target evidence.Target, id string, check func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding), contexts ...evaluationContext) (Outcome, []Finding) {
+	context := evaluationContext{now: localNow}
+	if len(contexts) > 0 {
+		context = contexts[0]
+	}
+	rule, ok := LookupRule(id)
+	if !ok {
+		panic("test check requires a registered rule: " + id)
+	}
+	rule.Check = check
+	if rule.prepare != nil {
+		rule.Check = rule.prepare(context)
 	}
 	enabled := true
-	return evaluateRule(target, Policy{Rules: map[string]RuleOptions{id: {Enabled: &enabled, Severity: Warning}}}, rule)
+	return executionFromPolicy(Policy{Rules: map[string]RuleOptions{id: {Enabled: &enabled, Severity: Warning}}}).evaluateRule(target, rule)
 }
 
 func TestLocalRulesPositiveNegativeUnknown(t *testing.T) {
@@ -265,24 +275,16 @@ func TestLocalRulesPositiveNegativeUnknown(t *testing.T) {
 				c.Record.Depends = []string{"python >=3.11"}
 				return localTarget(c, localRecord("numpy", "2"))
 			}},
-		{"ENV006", checkDuplicates,
+		{"ENV006", prepareDuplicates(evaluationContext{}),
 			func() evidence.Target {
-				x := localTarget(localRecord("numpy", "2"))
-				peer := x.Prefixes[0]
-				peer.Path = "/other"
-				x.Peers = []evidence.Prefix{x.Prefixes[0], peer}
-				return x
+				return localTarget(localRecord("numpy", "2"))
 			},
 			func() evidence.Target {
-				x := localTarget(localRecord("numpy", "2"))
-				peer := evidence.Prefix{Path: "/other", RecordCoverage: evidence.Complete, Records: []inventory.CondaRecord{localRecord("numpy", "3")}}
-				x.Peers = []evidence.Prefix{x.Prefixes[0], peer}
-				return x
+				return localTarget(localRecord("numpy", "2"))
 			},
 			func() evidence.Target {
 				x := localTarget(localRecord("numpy", "2"))
 				x.Prefixes[0].Records[0].Record.Channel = ""
-				x.Peers = []evidence.Prefix{x.Prefixes[0]}
 				return x
 			}},
 		{"ENV007", checkMixedChannels,
@@ -306,12 +308,11 @@ func TestLocalRulesPositiveNegativeUnknown(t *testing.T) {
 			},
 			func() evidence.Target { return localTarget() },
 			func() evidence.Target { x := localTarget(); x.Coverage["host-cache"] = evidence.Partial; return x }},
-		{"ENV009", checkPythonEOL,
+		{"ENV009", preparePythonEOL(evaluationContext{}),
 			func() evidence.Target { return localTarget(localRecord("python", "3.10.16")) },
 			func() evidence.Target { return localTarget(localRecord("python", "3.14.0")) },
 			func() evidence.Target {
 				x := localTarget(localRecord("python", "3.14.0"))
-				x.AsOf = time.Time{}
 				return x
 			}},
 		{"ENV010", checkInstalledLock,
@@ -351,8 +352,17 @@ func TestLocalRulesPositiveNegativeUnknown(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
 			rule := mustRule(t, tt.id)
-			if reflect.ValueOf(rule.Check).Pointer() != reflect.ValueOf(tt.check).Pointer() {
+			if rule.prepare == nil && reflect.ValueOf(rule.Check).Pointer() != reflect.ValueOf(tt.check).Pointer() {
 				t.Fatalf("registry callback for %s does not match its behavior fixtures", tt.id)
+			}
+			if rule.prepare != nil {
+				prepare := prepareDuplicates
+				if tt.id == "ENV009" {
+					prepare = preparePythonEOL
+				}
+				if reflect.ValueOf(rule.prepare).Pointer() != reflect.ValueOf(prepare).Pointer() {
+					t.Fatalf("registry preparation for %s does not match its behavior fixtures", tt.id)
+				}
 			}
 			for _, test := range []struct {
 				name   string
@@ -363,7 +373,22 @@ func TestLocalRulesPositiveNegativeUnknown(t *testing.T) {
 				{"positive", tt.positive(), FindingStatus, 1}, {"negative", tt.negative(), Pass, 0}, {"unknown", tt.unknown(), Unknown, 0},
 			} {
 				t.Run(test.name, func(t *testing.T) {
-					outcome, findings := runLocalCheck(test.target, tt.id, tt.check)
+					context := evaluationContext{now: localNow}
+					if tt.id == "ENV009" && test.name == "unknown" {
+						context.now = time.Time{}
+					}
+					if tt.id == "ENV006" {
+						context.peers = slices.Clone(test.target.Prefixes)
+						switch test.name {
+						case "positive":
+							peer := test.target.Prefixes[0]
+							peer.Path = "/other"
+							context.peers = append(context.peers, peer)
+						case "negative":
+							context.peers = append(context.peers, evidence.Prefix{Path: "/other", RecordCoverage: evidence.Complete, Records: []inventory.CondaRecord{localRecord("numpy", "3")}})
+						}
+					}
+					outcome, findings := runLocalCheck(test.target, tt.id, tt.check, context)
 					if outcome.Status != test.status || len(findings) != test.count {
 						t.Fatalf("status=%s findings=%d, want %s/%d; reason=%s", outcome.Status, len(findings), test.status, test.count, outcome.Reason)
 					}
@@ -486,8 +511,8 @@ func TestDuplicateIdentitySafety(t *testing.T) {
 			x := localTarget(localRecord("numpy", "2"))
 			peer := evidence.Prefix{Path: "/other", RecordCoverage: evidence.Complete, Records: []inventory.CondaRecord{localRecord("numpy", "2")}}
 			tt.change(&peer)
-			x.Peers = []evidence.Prefix{x.Prefixes[0], peer}
-			outcome, findings := runLocalCheck(x, "ENV006", checkDuplicates)
+			context := evaluationContext{peers: []evidence.Prefix{x.Prefixes[0], peer}}
+			outcome, findings := runLocalCheck(x, "ENV006", prepareDuplicates(context), context)
 			if outcome.Status != tt.status || len(findings) != tt.count {
 				t.Fatalf("outcome=%+v findings=%+v", outcome, findings)
 			}
@@ -500,8 +525,8 @@ func TestDuplicateIdentitySafety(t *testing.T) {
 	x.Prefixes[0].Records[0].Record.SHA256 = ""
 	peer := evidence.Prefix{Path: "/other", RecordCoverage: evidence.Complete, Records: []inventory.CondaRecord{localRecord("numpy", "2")}}
 	peer.Records[0].Record.SHA256 = ""
-	x.Peers = []evidence.Prefix{x.Prefixes[0], peer}
-	if _, findings := runLocalCheck(x, "ENV006", checkDuplicates); len(findings) != 1 {
+	context := evaluationContext{peers: []evidence.Prefix{x.Prefixes[0], peer}}
+	if _, findings := runLocalCheck(x, "ENV006", prepareDuplicates(context), context); len(findings) != 1 {
 		t.Fatal("complete matching metadata with no reported hashes on either side should be a candidate")
 	}
 }
@@ -583,8 +608,9 @@ func TestPythonEOLDateAndCoverageBoundaries(t *testing.T) {
 	} {
 		t.Run(tt.version+"/"+tt.date, func(t *testing.T) {
 			x := localTarget(localRecord("python", tt.version))
-			x.AsOf, _ = time.Parse(time.DateOnly, tt.date)
-			outcome, findings := runLocalCheck(x, "ENV009", checkPythonEOL)
+			now, _ := time.Parse(time.DateOnly, tt.date)
+			context := evaluationContext{now: now}
+			outcome, findings := runLocalCheck(x, "ENV009", preparePythonEOL(context), context)
 			if outcome.Status != tt.status || len(findings) != tt.count {
 				t.Fatalf("outcome=%+v findings=%+v", outcome, findings)
 			}
@@ -596,7 +622,7 @@ func TestPythonEOLDateAndCoverageBoundaries(t *testing.T) {
 	x := localTarget(localRecord("python", "3.10.16"))
 	x.Coverage["conda-records"] = evidence.Partial
 	x.Prefixes[0].RecordCoverage = evidence.Partial
-	if _, findings := runLocalCheck(x, "ENV009", checkPythonEOL); len(findings) != 1 {
+	if _, findings := runLocalCheck(x, "ENV009", preparePythonEOL(evaluationContext{})); len(findings) != 1 {
 		t.Fatal("positive observed Python EOL survives partial enumeration")
 	}
 }
@@ -662,23 +688,24 @@ func TestRequestedSpecsConstraintsNotPinnedBoolean(t *testing.T) {
 }
 
 func TestLocalChecksDoNotMutateFacts(t *testing.T) {
+	supportInjectRegistryRow(t)
 	x := localTarget(localRecord("numpy", "2"), localRecord("conda", "24"), localRecord("python", "3.10"))
 	x.Python = []evidence.PythonDistribution{localDistribution("numpy", "2", "numpy"), localDistribution("numpy", "3", "")}
 	x.Archives = []evidence.Artifact{{Path: "/z", Bytes: 2}, {Path: "/a", Bytes: 3}}
-	x.Peers = []evidence.Prefix{x.Prefixes[0], {Path: "/other", Records: slices.Clone(x.Prefixes[0].Records), RecordCoverage: evidence.Complete}}
+	context := evaluationContext{now: localNow, peers: []evidence.Prefix{x.Prefixes[0], {Path: "/other", Records: slices.Clone(x.Prefixes[0].Records), RecordCoverage: evidence.Complete}}}
 	before, _ := json.Marshal(struct {
 		Target          evidence.Target
 		Prefixes, Peers []evidence.Prefix
 		Records         []inventory.CondaRecord
-	}{x, x.Prefixes, x.Peers, x.Prefixes[0].Records})
-	for _, check := range []func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding){checkPipInstalled, checkPipShadows, checkWorkingBase, checkDuplicates, checkMixedChannels, checkHostCache, checkPythonEOL, checkInstalledLock, checkRequestedSpecs} {
-		runLocalCheck(x, "TST", check)
+	}{x, x.Prefixes, context.peers, x.Prefixes[0].Records})
+	for _, check := range []func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding){checkPipInstalled, checkPipShadows, checkWorkingBase, prepareDuplicates(context), checkMixedChannels, checkHostCache, preparePythonEOL(context), checkInstalledLock, checkRequestedSpecs} {
+		runLocalCheck(x, "TST001", check)
 	}
 	after, _ := json.Marshal(struct {
 		Target          evidence.Target
 		Prefixes, Peers []evidence.Prefix
 		Records         []inventory.CondaRecord
-	}{x, x.Prefixes, x.Peers, x.Prefixes[0].Records})
+	}{x, x.Prefixes, context.peers, x.Prefixes[0].Records})
 	if string(before) != string(after) {
 		t.Fatal("pure callbacks mutated input facts")
 	}
@@ -690,8 +717,8 @@ func TestLocalChecksEmptyAndPartialSubjects(t *testing.T) {
 		check func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding)
 	}{
 		{"ENV003", checkPipInstalled}, {"ENV004", checkPipShadows}, {"ENV005", checkWorkingBase},
-		{"ENV006", checkDuplicates}, {"ENV007", checkMixedChannels}, {"ENV008", checkHostCache},
-		{"ENV009", checkPythonEOL}, {"ENV010", checkInstalledLock}, {"ENV012", checkRequestedSpecs},
+		{"ENV006", prepareDuplicates(evaluationContext{})}, {"ENV007", checkMixedChannels}, {"ENV008", checkHostCache},
+		{"ENV009", preparePythonEOL(evaluationContext{})}, {"ENV010", checkInstalledLock}, {"ENV012", checkRequestedSpecs},
 	} {
 		t.Run(tt.id, func(t *testing.T) {
 			x := localTarget()
@@ -763,22 +790,25 @@ func TestLocalUnknownBranches(t *testing.T) {
 			x.Prefixes[0].RecordCoverage = evidence.Partial
 			return x
 		}},
-		{"peer input missing", "ENV006", checkDuplicates, func() evidence.Target { return localTarget(localRecord("numpy", "2")) }},
-		{"duplicate conda names", "ENV006", checkDuplicates, func() evidence.Target {
+		{"peer input missing", "ENV006", prepareDuplicates(evaluationContext{}), func() evidence.Target { return localTarget(localRecord("numpy", "2")) }},
+		{"duplicate conda names", "ENV006", prepareDuplicates(evaluationContext{}), func() evidence.Target {
 			x := localTarget(localRecord("numpy", "2"), localRecord("NumPy", "2"))
-			x.Peers = []evidence.Prefix{x.Prefixes[0]}
 			return x
 		}},
-		{"record version invalid", "ENV006", checkDuplicates, func() evidence.Target {
+		{"record version invalid", "ENV006", prepareDuplicates(evaluationContext{}), func() evidence.Target {
 			x := localTarget(localRecord("numpy", "invalid version!"))
-			x.Peers = []evidence.Prefix{x.Prefixes[0]}
 			return x
 		}},
-		{"EOL name invalid", "ENV009", checkPythonEOL, func() evidence.Target { return localTarget(localRecord("python >=3.11", "3.11")) }},
+		{"EOL name invalid", "ENV009", preparePythonEOL(evaluationContext{}), func() evidence.Target { return localTarget(localRecord("python >=3.11", "3.11")) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			outcome, findings := runLocalCheck(tt.target(), tt.id, tt.check)
+			target := tt.target()
+			context := evaluationContext{now: localNow}
+			if tt.id == "ENV006" && tt.name != "peer input missing" {
+				context.peers = slices.Clone(target.Prefixes)
+			}
+			outcome, findings := runLocalCheck(target, tt.id, tt.check, context)
 			if outcome.Status != Unknown || len(findings) != 0 {
 				t.Fatalf("outcome=%+v findings=%+v", outcome, findings)
 			}
@@ -790,13 +820,13 @@ func TestKnownDifferencesAndHashGapsAreOrderIndependent(t *testing.T) {
 	x := localTarget(localRecord("numpy", "2"), localRecord("python", "3.14"))
 	peer := evidence.Prefix{Path: "/other", RecordCoverage: evidence.Complete, Records: []inventory.CondaRecord{localRecord("numpy", "3"), localRecord("python", "3.14")}}
 	peer.Records[1].Record.SHA256 = ""
-	x.Peers = []evidence.Prefix{x.Prefixes[0], peer}
-	first, _ := runLocalCheck(x, "ENV006", checkDuplicates)
+	context := evaluationContext{peers: []evidence.Prefix{x.Prefixes[0], peer}}
+	first, _ := runLocalCheck(x, "ENV006", prepareDuplicates(context), context)
 	if first.Status != Unknown {
 		t.Fatalf("a hash gap must not become an all-clear because another package differs: %+v", first)
 	}
 	for range 100 {
-		got, findings := runLocalCheck(x, "ENV006", checkDuplicates)
+		got, findings := runLocalCheck(x, "ENV006", prepareDuplicates(context), context)
 		if got.Status != first.Status || got.Reason != first.Reason || len(findings) != 0 {
 			t.Fatalf("order-dependent result: %+v vs %+v", first, got)
 		}
@@ -862,8 +892,8 @@ func TestDuplicateGroupReportedOncePerTarget(t *testing.T) {
 	// The same prefix appears twice in the target and once as a peer.
 	x.Prefixes = append(x.Prefixes, x.Prefixes[0])
 	peer := evidence.Prefix{Path: "/other", RecordCoverage: evidence.Complete, Records: []inventory.CondaRecord{localRecord("numpy", "2")}}
-	x.Peers = []evidence.Prefix{x.Prefixes[0], peer}
-	outcome, findings := runLocalCheck(x, "ENV006", checkDuplicates)
+	context := evaluationContext{peers: []evidence.Prefix{x.Prefixes[0], peer}}
+	outcome, findings := runLocalCheck(x, "ENV006", prepareDuplicates(context), context)
 	if len(findings) != 1 || outcome.Status != FindingStatus {
 		t.Fatalf("one duplicate group must yield one finding: outcome=%+v findings=%d", outcome, len(findings))
 	}
@@ -871,13 +901,12 @@ func TestDuplicateGroupReportedOncePerTarget(t *testing.T) {
 
 func TestDuplicateGroupsKeepValidCrossTargetReports(t *testing.T) {
 	a := localTarget(localRecord("numpy", "2"))
-	a.Peers = []evidence.Prefix{a.Prefixes[0], {Path: "/other", RecordCoverage: evidence.Complete, Records: []inventory.CondaRecord{localRecord("numpy", "2")}}}
 	b := localTarget(localRecord("numpy", "2"))
 	b.ID = "other-target"
 	b.Prefixes[0].Path = "/other"
-	b.Peers = a.Peers
+	context := evaluationContext{peers: []evidence.Prefix{a.Prefixes[0], {Path: "/other", RecordCoverage: evidence.Complete, Records: []inventory.CondaRecord{localRecord("numpy", "2")}}}}
 	for _, target := range []evidence.Target{a, b} {
-		outcome, findings := runLocalCheck(target, "ENV006", checkDuplicates)
+		outcome, findings := runLocalCheck(target, "ENV006", prepareDuplicates(context), context)
 		if len(findings) == 0 || outcome.Status != FindingStatus {
 			t.Fatalf("target %s lost its valid duplicate report: outcome=%+v findings=%d", target.ID, outcome, len(findings))
 		}

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/conda-incubator/envscout/internal/discovery"
 	"github.com/conda-incubator/envscout/internal/evidence"
 	gorattler "github.com/conda-incubator/go-rattler"
 )
@@ -27,7 +28,7 @@ func duplicateRecords(prefix evidence.Prefix) (map[string]gorattler.PrefixRecord
 	for _, located := range prefix.Records {
 		record := located.Record
 		name, valid := canonicalCondaName(record.Name)
-		channel, channelValid := localChannel(record)
+		channel, channelValid := condaChannelFacts(record)
 		_, versionErr := gorattler.CompareVersions(record.Version, record.Version)
 		if !valid || !channelValid || versionErr != nil || record.Build == "" || record.Subdir == "" || !validMetadataHash(record.SHA256, 64) || !validMetadataHash(record.MD5, 32) {
 			return nil, false
@@ -35,7 +36,7 @@ func duplicateRecords(prefix evidence.Prefix) (map[string]gorattler.PrefixRecord
 		if _, duplicate := records[name]; duplicate {
 			return nil, false
 		}
-		record.Name, record.Channel = name, channel
+		record.Name, record.Channel = name, channel.identity
 		record.SHA256, record.MD5 = strings.ToLower(record.SHA256), strings.ToLower(record.MD5)
 		records[name] = record
 	}
@@ -90,27 +91,23 @@ func prepareDuplicateSets(prefixes []evidence.Prefix) map[string]duplicateSet {
 	return sets
 }
 
-func checkDuplicates(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
-	return checkPreparedDuplicates(target, opts, rule, prepareDuplicateSets(append(slices.Clone(target.Peers), target.Prefixes...)))
-}
-
-func prepareDuplicates(prefixes []evidence.Prefix) func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding) {
-	sets := prepareDuplicateSets(prefixes)
+func prepareDuplicates(context evaluationContext) func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding) {
+	sets := prepareDuplicateSets(context.peers)
 	return func(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
-		return checkPreparedDuplicates(target, opts, rule, sets)
+		return checkPreparedDuplicates(target, opts, rule, context.peers, sets)
 	}
 }
 
-func checkPreparedDuplicates(target evidence.Target, opts RuleOptions, rule Rule, sets map[string]duplicateSet) (Outcome, []Finding) {
+func checkPreparedDuplicates(target evidence.Target, opts RuleOptions, rule Rule, peers []evidence.Prefix, sets map[string]duplicateSet) (Outcome, []Finding) {
 	outcome := localRecordOutcome(target)
 	if outcome.Status == NotApplicable {
 		return outcome, nil
 	}
-	if target.Peers == nil {
+	if peers == nil {
 		outcome.Status, outcome.Reason = Unknown, "cross-prefix conda metadata was not supplied"
 		return outcome, nil
 	}
-	peers := slices.Clone(target.Peers)
+	peers = slices.Clone(peers)
 	slices.SortFunc(peers, func(a, b evidence.Prefix) int { return strings.Compare(a.Path, b.Path) })
 	var findings []Finding
 	emitted := map[string]bool{}
@@ -120,7 +117,12 @@ func checkPreparedDuplicates(target evidence.Target, opts RuleOptions, rule Rule
 			continue
 		}
 		seenPrefix[prefix.Path] = true
-		set := sets[prefix.Path]
+		set, present := sets[prefix.Path]
+		if !present && prefix.Kind != discovery.KindVenv {
+			// Admit conda subjects in supplied-empty scopes without validating
+			// excluded virtualenvs or mutating shared prepared sets.
+			set.records, set.valid = duplicateRecords(prefix)
+		}
 		records := set.records
 		if !set.valid {
 			outcome.Status, outcome.Reason = Unknown, "complete canonical conda identity metadata is unavailable for "+prefix.Path
