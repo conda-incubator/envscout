@@ -73,6 +73,8 @@ type PythonDistribution struct {
 	Version string `json:"version"`
 	Path    string `json:"path"`
 	OwnedBy string `json:"owned_by,omitempty"`
+	Created time.Time `json:"created"`
+	Modified time.Time `json:"modified"`
 }
 
 // LockComparison compares installed conda metadata only, not files or manifests.
