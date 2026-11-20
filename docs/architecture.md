@@ -48,7 +48,7 @@ Boxes show Go packages or groups in one process with linked libraries, not servi
 | Entry point / CLI | [`cmd/envscout`](../cmd/envscout), [`internal/cli`](../internal/cli) | Signals, flags, timeout, orchestration, rendering and exit codes; Cobra. Text/OSC progress stays here, separate from reports. |
 | Discovery | [`internal/discovery`](../internal/discovery) | Bounded known-location hints or explicit-root traversal; conda/venv markers, exclusions and scope issues. fastwalk for host traversal. |
 | OCI adapter | [`internal/imageinput`](../internal/imageinput) | Load one archive/platform, expose identity, final filesystem and layers, and own staging cleanup; stereoscope. |
-| Inventory | [`internal/inventory`](../internal/inventory) | Offline Syft cataloging and CycloneDX output; canonical conda record access/parsing reused by evidence. |
+| Inventory | [`internal/inventory`](../internal/inventory) | Offline Syft cataloging and CycloneDX output; pure canonical conda document parsing shared by evidence, with resolver-based record access retained for images. |
 | Evidence | [`internal/evidence`](../internal/evidence) | Collect requested records, ownership, Python metadata, caches, project/lock facts or layer artifacts; return snapshots with coverage and issues. |
 | Lint | [`internal/lint`](../internal/lint) | Normalize profiles/config, derive requirements, evaluate without filesystem I/O, apply suppressions and report findings/outcomes. |
 
@@ -83,6 +83,8 @@ The flowchart omits detailed failure and cancellation branches. Arrows show poss
 - `find`: no roots means bounded hints; roots mean recursive discovery. Markers identify candidates, not working interpreters or valid package records.
 - `scan`: one SBOM per discovered directory environment, or one whole-image SBOM for an OCI archive's final filesystem. Cataloging is offline.
 - `lint`: no prerequisite SBOM. Host collection discovers targets, validates canonical records, prepares coverage, optionally associates projects, then inspects evidence. Images can also yield historical-layer evidence of retained content.
+
+[`ParseCondaRecord`](../internal/inventory/records.go) parses original document bytes and preserves ownership omission versus an explicitly empty list. Readers own file admission, bounds and source attribution: host records use confined reads directly, while image records retain the Syft resolver path. The host Python metadata resolver remains separate.
 
 ## Lint rule extension
 

@@ -97,6 +97,18 @@ func readCondaRecord(ctx context.Context, resolver file.Resolver, location file.
 	}
 	// Parse bytes already read even if cancellation arrived on their last read.
 	// The caller keeps this positive and returns the context error alongside it.
+	record, err := ParseCondaRecord(data)
+	if err != nil {
+		return CondaRecord{}, err
+	}
+	record.Path = location.RealPath
+	return record, nil
+}
+
+// ParseCondaRecord parses original installed-record bytes without I/O or source
+// attribution. Callers own admission, read limits, paths and source indexes.
+// Invalid documents return a zero record and an error.
+func ParseCondaRecord(data []byte) (CondaRecord, error) {
 	record, err := gorattler.ParsePrefixRecord(data)
 	if err != nil {
 		return CondaRecord{}, err
@@ -115,7 +127,7 @@ func readCondaRecord(ctx context.Context, resolver file.Resolver, location file.
 		}
 		known = len(paths["paths"]) > 0 && string(paths["paths"]) != "null"
 	}
-	return CondaRecord{Path: location.RealPath, Record: record, OwnershipKnown: known}, nil
+	return CondaRecord{Record: record, OwnershipKnown: known}, nil
 }
 
 type recordContextReader struct {

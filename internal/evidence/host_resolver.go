@@ -13,9 +13,7 @@ import (
 	"sync"
 
 	stereofile "github.com/anchore/stereoscope/pkg/file"
-	"github.com/anchore/syft/syft/artifact"
 	"github.com/anchore/syft/syft/file"
-	"github.com/anchore/syft/syft/source"
 	"github.com/bmatcuk/doublestar/v4"
 )
 
@@ -81,7 +79,6 @@ type hostFileResolver struct {
 	paths     []string
 	mu        sync.Mutex
 	readBytes int64
-	readLimit int64
 	issue     error
 }
 
@@ -183,24 +180,11 @@ func (r *hostFileResolver) FileContentsByLocation(location file.Location) (io.Re
 	info := r.files[name]
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	limit := r.readLimit
-	if limit == 0 {
-		limit = hostMetadataLimit
-	}
-	if !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > limit || r.readBytes+info.Size() > 256<<20 {
+	if !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > hostMetadataLimit || r.readBytes+info.Size() > 256<<20 {
 		return nil, fmt.Errorf("host metadata read limit exceeded")
 	}
 	r.readBytes += info.Size()
-	data, err := readHostMetadata(r.ctx, r.root, name, limit)
+	data, err := readHostMetadata(r.ctx, r.root, name, hostMetadataLimit)
 	r.issue = errors.Join(r.issue, err)
 	return io.NopCloser(bytes.NewReader(data)), err
 }
-
-type hostRecordSource struct{ resolver *hostFileResolver }
-
-func (s hostRecordSource) ID() artifact.ID                                  { return artifact.ID(FileID(s.resolver.base)) }
-func (s hostRecordSource) FileResolver(source.Scope) (file.Resolver, error) { return s.resolver, nil }
-func (s hostRecordSource) Describe() source.Description {
-	return source.Description{ID: string(s.ID()), Name: s.resolver.base}
-}
-func (hostRecordSource) Close() error { return nil }

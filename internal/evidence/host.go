@@ -1,6 +1,7 @@
 package evidence
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,13 +9,13 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/anchore/syft/syft/source"
 	"github.com/conda-incubator/envscout/internal/discovery"
 	"github.com/conda-incubator/envscout/internal/inventory"
 )
@@ -334,7 +335,8 @@ func condaRecordsForPrefix(ctx context.Context, prefix string) ([]inventory.Cond
 		entries = entries[:hostEntryLimit]
 		enumerationErr = errors.Join(enumerationErr, fmt.Errorf("conda-meta entry limit exceeded (%d)", hostEntryLimit))
 	}
-	resolver := &hostFileResolver{ctx: ctx, root: root, base: prefix, files: map[string]os.FileInfo{}, readLimit: inventory.CondaRecordByteLimit}
+	files := make(map[string]os.FileInfo)
+	var paths []string
 	for _, entry := range entries {
 		if ctx.Err() != nil {
 			break
@@ -352,12 +354,70 @@ func condaRecordsForPrefix(ctx context.Context, prefix string) ([]inventory.Cond
 			continue
 		}
 		name := filepath.Join("conda-meta", entry.Name())
-		resolver.files[name] = info
-		resolver.paths = append(resolver.paths, name)
+		files[name] = info
+		paths = append(paths, name)
 	}
-	sort.Strings(resolver.paths)
-	records, err := inventory.CondaRecords(ctx, hostRecordSource{resolver}, source.SquashedScope)
-	return records, errors.Join(err, enumerationErr, ctx.Err())
+	sort.Strings(paths)
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(err, enumerationErr, ctx.Err())
+	}
+	// Keep the former resolver's cancellation boundary before reading any records.
+	var names []string
+	for _, name := range paths {
+		if ctx.Err() != nil {
+			break
+		}
+		if files[name].Mode().IsRegular() {
+			names = append(names, name)
+		}
+	}
+	var records []inventory.CondaRecord
+	var readBytes int64
+	err = ctx.Err()
+	for index, name := range names {
+		if ctx.Err() != nil {
+			break
+		}
+		filename := filepath.Join(prefix, name)
+		record, readErr := readHostCondaRecord(ctx, root, name, filename, files[name], &readBytes)
+		if readErr != nil {
+			err = errors.Join(err, fmt.Errorf("conda record %s: %w", filename, readErr))
+			continue
+		}
+		record.Path, record.Record.SourcePath = filename, filename
+		record.Record.SourceIndex = index
+		records = append(records, record)
+	}
+	return records, errors.Join(errors.Join(err, ctx.Err()), enumerationErr, ctx.Err())
+}
+
+func readHostCondaRecord(ctx context.Context, root *os.Root, name, filename string, info os.FileInfo, readBytes *int64) (inventory.CondaRecord, error) {
+	// Match inventory's direct-document guard, including Unix backslash names.
+	real := strings.ReplaceAll(filename, "\\", "/")
+	if path.Base(path.Dir(real)) != "conda-meta" || path.Ext(real) != ".json" {
+		return inventory.CondaRecord{}, fmt.Errorf("metadata is not a direct conda-meta document")
+	}
+	if !info.Mode().IsRegular() || info.Size() < 0 {
+		return inventory.CondaRecord{}, fmt.Errorf("metadata is not a regular file")
+	}
+	if info.Size() > inventory.CondaRecordByteLimit {
+		return inventory.CondaRecord{}, fmt.Errorf("metadata exceeds %d bytes", inventory.CondaRecordByteLimit)
+	}
+	if *readBytes+info.Size() > 256<<20 {
+		return inventory.CondaRecord{}, fmt.Errorf("host metadata read limit exceeded")
+	}
+	// Failed reads still consume the indexed size, as in the former resolver.
+	*readBytes += info.Size()
+	data, err := readHostMetadata(ctx, root, name, inventory.CondaRecordByteLimit)
+	if err != nil {
+		return inventory.CondaRecord{}, err
+	}
+	// Preserve the old context-checked buffer read before invoking the parser.
+	data, err = io.ReadAll(io.LimitReader(evidenceContextReader{ctx, bytes.NewReader(data)}, inventory.CondaRecordByteLimit+1))
+	if err != nil {
+		return inventory.CondaRecord{}, err
+	}
+	return inventory.ParseCondaRecord(data)
 }
 
 // The association is supplied by the caller. Presence of a lock is not proof of
