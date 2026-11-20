@@ -317,7 +317,7 @@ func TestRevisionParsing(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := historyRevision(context.Background(), strings.NewReader(tt.data))
+			got, err := parseHistoryRevision(strings.NewReader(tt.data))
 			if err != nil || (got == nil) != (tt.want == nil) || (got != nil && *got != *tt.want) {
 				t.Fatalf("revision = %v, %v; want %v", got, err, tt.want)
 			}

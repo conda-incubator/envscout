@@ -14,6 +14,7 @@ import (
 	"github.com/anchore/syft/syft/file"
 	"github.com/anchore/syft/syft/pkg"
 	"github.com/anchore/syft/syft/pkg/cataloger/python"
+	"github.com/conda-incubator/envscout/internal/inventory"
 	gorattler "github.com/conda-incubator/go-rattler"
 )
 
@@ -111,8 +112,7 @@ func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 	if err != nil || r.issue != nil {
 		hostIssue(target, CapPythonDistributions, prefix.Path, "installed Python metadata catalog is incomplete", err, r.issue)
 	}
-	owners := map[string]string{}
-	ambiguous := map[string]bool{}
+	owners := inventory.OwnershipIndex{}
 	observed := map[string]bool{}
 	for _, located := range prefix.Records {
 		if !located.OwnershipKnown {
@@ -123,10 +123,7 @@ func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 			if !ok || r.files[local] == nil {
 				return
 			}
-			if owner := owners[local]; owner != "" && owner != located.Record.Name {
-				ambiguous[local] = true
-			}
-			owners[local] = located.Record.Name
+			owners.Add(local, located.Record.Name)
 		}
 		for _, path := range located.Record.Files {
 			addOwner(path)
@@ -149,8 +146,9 @@ func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 				continue
 			}
 			observed[local] = true
-			owner := owners[local]
-			if ambiguous[local] {
+			ownership := owners[local]
+			owner := ownership.Name
+			if ownership.Ambiguous {
 				owner = ""
 				hostIssue(target, CapPythonDistributions, location.RealPath, "distribution metadata has multiple conda owners")
 			}

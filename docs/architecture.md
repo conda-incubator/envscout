@@ -86,6 +86,8 @@ The flowchart omits detailed failure and cancellation branches. Arrows show poss
 
 [`ParseCondaRecord`](../internal/inventory/records.go) parses original document bytes and preserves ownership omission versus an explicitly empty list. Readers own file admission, bounds and source attribution: host records use confined reads directly, while image records retain the Syft resolver path. The host Python metadata resolver remains separate.
 
+The pure [ownership index](../internal/inventory/ownership.go) records caller-admitted path claims and sticky ambiguity; the host collector still localizes paths, checks its metadata index and reports ownership gaps. The [history parser](../internal/discovery/history.go) counts transaction headers from a reader, while discovery retains cancellation, total-byte bounds and confined file access.
+
 ## Lint rule extension
 
 Rules are compiled-in Go checks, not runtime plugins. The [registry](../internal/lint/registry.go) defines stable IDs/versions, descriptions, sources, capabilities, profile defaults, recommendations and exceptions. Configuration adjusts registered rules; `--list-rules` uses this registry.
@@ -93,6 +95,8 @@ Rules are compiled-in Go checks, not runtime plugins. The [registry](../internal
 [`BuildPolicy`, `Requirements` and `Evaluate`](../internal/lint/engine.go) resolve policy, derive collection requests and evaluate snapshots. A private [execution view](../internal/lint/execution.go) combines normalized options with support derived from the registry once per operation. Policy validation, requests, preparation and applicability use that support; public policy serialization and digests are unchanged. [Named capability constants](../internal/evidence/model.go) connect requests, collector coverage and rules without changing their string values. The clock and cross-target peers belong to [lint-owned evaluation context](../internal/lint/evaluation.go), not collected evidence.
 
 Collectors own I/O; `Check` reads a target and effective options, returning an outcome and findings without mutation or fixes. Context-aware preparation supplies the clock or peer scope and prepares immutable shared facts once per evaluation. The engine applies suppressions and report limits. Checks must respect coverage: partial evidence can establish findings, not absence. `unknown`, `unavailable` and `not_applicable` are not `pass`.
+
+[Shared channel facts](../internal/lint/channel.go) expose canonical identity and recognized family without imposing one package-validity definition. Mixed-channel checks recognize defaults main/r/msys2 and conda-forge; CA recommendations support defaults main and conda-forge only. Duplicate-set checks retain their stricter identity requirements. Conda and Python version semantics remain separate.
 
 To add or improve a rule:
 

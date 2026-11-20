@@ -2,7 +2,6 @@ package lint
 
 import (
 	"fmt"
-	"net/url"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -334,24 +333,6 @@ func checkWorkingBase(target evidence.Target, opts RuleOptions, rule Rule) (Outc
 	return outcome, findings
 }
 
-// CanonicalChannel redacts secrets. Remove only the record's explicit subdir,
-// not an arbitrary suffix that happens to resemble a known channel name.
-func localChannel(record gorattler.PrefixRecord) (string, bool) {
-	channel, err := gorattler.CanonicalChannel(record.Channel)
-	if err != nil {
-		return "", false
-	}
-	u, err := url.Parse(channel)
-	if err != nil {
-		return "", false
-	}
-	if record.Subdir != "" {
-		u.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), "/"+record.Subdir)
-	}
-	u.Path = strings.TrimSuffix(u.Path, "/") + "/"
-	return u.String(), true
-}
-
 func checkMixedChannels(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
 	outcome := localRecordOutcome(target)
 	if outcome.Status == NotApplicable {
@@ -361,16 +342,15 @@ func checkMixedChannels(target evidence.Target, opts RuleOptions, rule Rule) (Ou
 	for _, prefix := range sortedLocalPrefixes(target) {
 		var defaults, forge []string
 		for _, located := range prefix.Records {
-			channel, valid := localChannel(located.Record)
+			channel, valid := condaChannelFacts(located.Record)
 			if !valid {
 				outcome.Status, outcome.Reason = Unknown, "a channel is unavailable or cannot be canonicalized; custom aliases and the defaults multichannel are not expanded"
 				continue
 			}
-			u, _ := url.Parse(channel)
-			switch {
-			case strings.EqualFold(u.Host, "repo.anaconda.com") && (u.Path == "/pkgs/main/" || u.Path == "/pkgs/r/" || u.Path == "/pkgs/msys2/"):
+			switch channel.family {
+			case channelDefaultsMain, channelDefaultsR, channelDefaultsMSYS:
 				defaults = append(defaults, located.Path)
-			case strings.EqualFold(u.Host, "conda.anaconda.org") && u.Path == "/conda-forge/":
+			case channelForge:
 				forge = append(forge, located.Path)
 			}
 		}
