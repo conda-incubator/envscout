@@ -14,28 +14,28 @@ var osPackageCommands = []string{"apt", "apt-get", "dnf", "dnf5", "yum", "rpm", 
 var shellCommands = []string{"sh", "bash", "dash", "ash", "ksh", "zsh", "fish", "csh", "tcsh"}
 
 func (c *imageCollector) executable(p string) (*file.Reference, error) {
-	resolution, err := c.resolve(p)
+	ref, err := c.resolveReference(p)
 	if err != nil {
 		return nil, err
 	}
-	if !resolution.HasReference() {
+	if ref == nil {
 		return nil, nil
 	}
-	metadata, err := c.loaded.Image.FileCatalog.Get(*resolution.Reference)
+	metadata, err := c.loaded.Image.FileCatalog.Get(*ref)
 	if err != nil {
 		return nil, fmt.Errorf("command metadata is unavailable")
 	}
 	if metadata.FileInfo == nil || metadata.Type != file.TypeRegular || !metadata.Mode().IsRegular() || metadata.Mode().Perm()&0o111 == 0 {
 		return nil, nil
 	}
-	header, err := c.readReference(*resolution.Reference, 512, false)
+	header, err := c.readReference(*ref, 512, false)
 	if err != nil {
 		return nil, err
 	}
 	if !bytes.HasPrefix(header, []byte{0x7f, 'E', 'L', 'F'}) && !validShebang(header) {
 		return nil, nil
 	}
-	return resolution.Reference, nil
+	return ref, nil
 }
 
 func validShebang(header []byte) bool {

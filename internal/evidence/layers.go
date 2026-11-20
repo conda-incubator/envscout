@@ -171,7 +171,7 @@ func (c *imageCollector) collectLayers() error {
 		if node.FileType == file.TypeDirectory {
 			return nil
 		}
-		resolution, err := c.resolve(string(p))
+		ref, err := c.resolveReference(string(p))
 		if err != nil {
 			if c.ctx.Err() != nil {
 				return c.ctx.Err()
@@ -182,20 +182,20 @@ func (c *imageCollector) collectLayers() error {
 			}
 			return nil
 		}
-		if resolution.HasReference() {
-			finalRefs[resolution.ID()] = true
-			if err := c.requireContentIdentity(*resolution.Reference); err != nil {
+		if ref != nil {
+			finalRefs[ref.ID()] = true
+			if err := c.requireContentIdentity(*ref); err != nil {
 				if c.ctx.Err() != nil {
 					return c.ctx.Err()
 				}
-				if c.cacheRelevantReference(*resolution.Reference, historicalRoots) {
+				if c.cacheRelevantReference(*ref, historicalRoots) {
 					c.issue(capability, string(p), err.Error())
 					finalComplete = false
 				}
 				return nil
 			}
 			if cacheAncestor(string(p), historicalRoots) == "" {
-				runtimeRefs[resolution.ID()] = true
+				runtimeRefs[ref.ID()] = true
 			}
 		}
 		return nil

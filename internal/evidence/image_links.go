@@ -59,13 +59,26 @@ func (c *imageCollector) cacheRelevantReference(ref file.Reference, roots map[st
 	return false
 }
 
-func (c *imageCollector) resolve(p string) (*file.Resolution, error) {
+func (c *imageCollector) resolveReference(p string) (*file.Reference, error) {
 	if err := c.ctx.Err(); err != nil {
 		return nil, err
 	}
-	found, resolution, err := c.tree.File(file.Path(p), filetree.FollowBasenameLinks)
+	ref, cached := c.resolvedReferences[p]
+	var resolution *file.Resolution
+	var found bool
+	var err error
+	if !cached {
+		found, resolution, err = c.tree.File(file.Path(p), filetree.FollowBasenameLinks)
+	}
 	if c.ctx.Err() != nil {
 		return nil, c.ctx.Err()
+	}
+	if cached {
+		if ref == nil {
+			return nil, nil
+		}
+		copy := *ref
+		return &copy, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("image-local link cannot be resolved")
@@ -73,7 +86,31 @@ func (c *imageCollector) resolve(p string) (*file.Resolution, error) {
 	if !found || resolution == nil {
 		return nil, errors.New("image-local target is missing")
 	}
-	return resolution, nil
+	ref = resolution.Reference
+	// Direct non-link lookups are already cheap and need no retained state.
+	linked := ref == nil || len(resolution.LinkResolutions) > 0 || resolution.RequestPath != ref.RealPath
+	if linked && len(c.resolvedReferences) < imageEntryLimit && len(p) <= imageResolutionBytesLimit-c.resolvedReferenceBytes {
+		bytes := len(p)
+		if ref != nil {
+			if len(ref.RealPath) > imageResolutionBytesLimit-c.resolvedReferenceBytes-bytes {
+				return ref, nil
+			}
+			bytes += len(ref.RealPath)
+			copy := *ref
+			copy.RealPath = file.Path(strings.Clone(string(ref.RealPath)))
+			ref = &copy
+		}
+		if c.resolvedReferences == nil {
+			c.resolvedReferences = map[string]*file.Reference{}
+		}
+		c.resolvedReferences[strings.Clone(p)] = ref
+		c.resolvedReferenceBytes += bytes
+		if ref != nil {
+			copy := *ref
+			return &copy, nil
+		}
+	}
+	return ref, nil
 }
 
 // Synthetic directories have no Reference (and hence no Resolution.RealPath).

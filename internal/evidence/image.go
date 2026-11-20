@@ -21,9 +21,10 @@ import (
 )
 
 const (
-	imagePathLimit     = 500000
-	imageEntryLimit    = 10000
-	imageMetadataLimit = 1 << 20
+	imagePathLimit            = 500000
+	imageEntryLimit           = 10000
+	imageMetadataLimit        = 1 << 20
+	imageResolutionBytesLimit = 1 << 20
 )
 
 var imageCapabilities = []string{CapPrefixes, CapCondaRecords, CapHistory, CapToolingPrefix, CapFinalCache, CapCacheLinkDependencies, CapRuntimeConfig, CapOSPackageTools, CapShellTools, CapLayerRetention}
@@ -43,6 +44,9 @@ type imageCollector struct {
 	confirmed []Prefix
 	// markerValidity reuses bounded index-marker acceptance, never timing or identity proof.
 	markerValidity map[file.ID]bool
+	// resolvedReferences holds scalar final link results, including reference-less directories.
+	resolvedReferences     map[string]*file.Reference
+	resolvedReferenceBytes int
 }
 
 // prefixRecords is the parsed final-record facts for one prefix. Membership in the map is
@@ -56,8 +60,8 @@ type prefixRecords struct {
 	cacheRoots []string
 }
 
-// CollectImage borrows an already verified image whose catalog and backing content remain
-// stable during collection. Loading and cleanup belong to the caller.
+// CollectImage borrows an already verified image whose trees, references, catalog and
+// backing content remain stable during collection. Loading and cleanup belong to the caller.
 // On cancellation it returns the partial target with every selected capability marked
 // Partial, together with the context error. Positive evidence gathered before the cancel
 // is kept.
@@ -645,26 +649,26 @@ func (c *imageCollector) collectCacheLinks() error {
 		}
 		if node.IsLink() {
 			if c.inCache(string(p)) {
-				resolution, err := c.resolve(string(p))
+				ref, err := c.resolveReference(string(p))
 				if err != nil {
 					if c.ctx.Err() != nil {
 						return c.ctx.Err()
 					}
 					// A dangling cache-only symlink cannot itself be a surviving
 					// runtime reference; outside aliases are checked separately.
-				} else if resolution.HasReference() {
-					metadata, err := c.loaded.Image.FileCatalog.Get(*resolution.Reference)
+				} else if ref != nil {
+					metadata, err := c.loaded.Image.FileCatalog.Get(*ref)
 					if err != nil || metadata.FileInfo == nil {
 						c.issue(CapCacheLinkDependencies, string(p), "cache link metadata is unavailable")
 					} else if metadata.Type == file.TypeRegular {
-						if err := c.requireContentIdentity(*resolution.Reference); err != nil {
+						if err := c.requireContentIdentity(*ref); err != nil {
 							if c.ctx.Err() != nil {
 								return c.ctx.Err()
 							}
 							c.issue(CapCacheLinkDependencies, string(p), err.Error())
 						} else {
-							refs[resolution.ID()] = *resolution.Reference
-							cachePaths[string(p)] = *resolution.Reference
+							refs[ref.ID()] = *ref
+							cachePaths[string(p)] = *ref
 						}
 					}
 				}
@@ -692,7 +696,7 @@ func (c *imageCollector) collectCacheLinks() error {
 		if err := c.ctx.Err(); err != nil {
 			return err
 		}
-		resolution, err := c.resolve(link.path)
+		ref, err := c.resolveReference(link.path)
 		if err != nil {
 			if c.ctx.Err() != nil {
 				return c.ctx.Err()
@@ -702,27 +706,27 @@ func (c *imageCollector) collectCacheLinks() error {
 			}
 			continue
 		}
-		isDirectory := !resolution.HasReference()
-		if resolution.HasReference() {
-			metadata, err := c.loaded.Image.FileCatalog.Get(*resolution.Reference)
+		isDirectory := ref == nil
+		if ref != nil {
+			metadata, err := c.loaded.Image.FileCatalog.Get(*ref)
 			if err != nil || metadata.FileInfo == nil {
 				c.issue(CapCacheLinkDependencies, link.path, "resolved link metadata is unavailable")
 				continue
 			}
 			isDirectory = metadata.Type == file.TypeDirectory
 		}
-		if !c.inCache(link.path) && resolution.HasReference() && !isDirectory {
-			if err := c.requireContentIdentity(*resolution.Reference); err != nil {
+		if !c.inCache(link.path) && ref != nil && !isDirectory {
+			if err := c.requireContentIdentity(*ref); err != nil {
 				if c.ctx.Err() != nil {
 					return c.ctx.Err()
 				}
-				if c.cacheRelevantReference(*resolution.Reference, c.caches) {
+				if c.cacheRelevantReference(*ref, c.caches) {
 					c.issue(CapCacheLinkDependencies, link.path, err.Error())
 				}
 				continue
 			}
-			_, cachedReference := refs[resolution.ID()]
-			if cachedReference || c.inCache(string(resolution.RealPath)) {
+			_, cachedReference := refs[ref.ID()]
+			if cachedReference || c.inCache(string(ref.RealPath)) {
 				c.target.CacheLinked = true
 			}
 		}
@@ -735,8 +739,8 @@ func (c *imageCollector) collectCacheLinks() error {
 				c.issue(CapCacheLinkDependencies, link.path, err.Error())
 				continue
 			}
-			if resolution.HasReference() {
-				destination = string(resolution.RealPath)
+			if ref != nil {
+				destination = string(ref.RealPath)
 			}
 			for cachedPath, ref := range cachePaths {
 				if err := c.ctx.Err(); err != nil {
@@ -748,7 +752,7 @@ func (c *imageCollector) collectCacheLinks() error {
 				}
 				probes++
 				if within(cachedPath, destination) {
-					probe, err := c.resolve(path.Join(link.path, strings.TrimPrefix(cachedPath, destination)))
+					probe, err := c.resolveReference(path.Join(link.path, strings.TrimPrefix(cachedPath, destination)))
 					if err != nil {
 						if c.ctx.Err() != nil {
 							return c.ctx.Err()
@@ -756,8 +760,8 @@ func (c *imageCollector) collectCacheLinks() error {
 						c.issue(CapCacheLinkDependencies, link.path, "cache descendant link cannot be resolved")
 						continue
 					}
-					if err == nil && probe.HasReference() {
-						if err := c.requireContentIdentity(*probe.Reference); err == nil && probe.ID() == ref.ID() {
+					if err == nil && probe != nil {
+						if err := c.requireContentIdentity(*probe); err == nil && probe.ID() == ref.ID() {
 							c.target.CacheLinked = true
 							break
 						}
