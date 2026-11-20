@@ -9,6 +9,7 @@ import (
 
 	"github.com/anchore/stereoscope/pkg/file"
 	"github.com/anchore/stereoscope/pkg/filetree/filenode"
+	"github.com/conda-incubator/envscout/internal/inventory"
 	gorattler "github.com/conda-incubator/go-rattler"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
@@ -100,9 +101,9 @@ func (c *imageCollector) collectLayers() error {
 			if marker {
 				_, parseErr = gorattler.ParseIndexJSON(data)
 			} else {
-				var record gorattler.PrefixRecord
-				record, parseErr = gorattler.ParsePrefixRecord(data)
-				packageName = record.Name
+				var record inventory.CondaRecord
+				record, parseErr = inventory.ParseCondaRecord(data)
+				packageName = record.Record.Name
 			}
 			if parseErr != nil {
 				c.issue(capability, name, "invalid historical conda marker")

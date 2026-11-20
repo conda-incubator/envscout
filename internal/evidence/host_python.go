@@ -11,6 +11,20 @@ import (
 	"strings"
 )
 
+// pythonPrimaryForContainer names the primary file without applying admission
+// or cataloger policy. Callers retain their different casing and venv checks.
+func pythonPrimaryForContainer(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".dist-info"):
+		return "METADATA"
+	case strings.HasSuffix(lower, ".egg-info"):
+		return "PKG-INFO"
+	default:
+		return ""
+	}
+}
+
 // Index the direct distribution metadata used for identity and ownership, not
 // application payload or nested license contents. This resolver is for lint,
 // not the full SBOM catalog, and application trees are never entered.
@@ -48,9 +62,8 @@ func indexHostPython(ctx context.Context, root *os.Root, installation string, r 
 		}
 		name := entry.Name()
 		rel := filepath.Join(installation, name)
-		lower := strings.ToLower(name)
-		isDist := strings.HasSuffix(lower, ".dist-info") || strings.HasSuffix(lower, ".egg-info")
-		if !isDist {
+		primary := pythonPrimaryForContainer(name)
+		if primary == "" {
 			continue
 		}
 		if entry.Type()&fs.ModeSymlink != 0 {
@@ -58,14 +71,14 @@ func indexHostPython(ctx context.Context, root *os.Root, installation string, r 
 			continue
 		}
 		if !entry.IsDir() {
-			if strings.HasSuffix(lower, ".egg-info") && entry.Type().IsRegular() {
+			if primary == "PKG-INFO" && entry.Type().IsRegular() {
 				indexHostPythonFile(r, target, rel, entry)
 			} else if target.IsVirtualenv() {
 				hostIssue(target, CapPythonDistributions, filepath.Join(r.base, rel), "Python distribution metadata container is not a directory or supported egg-info file")
 			}
 			continue
 		}
-		if err := indexHostPythonEntry(ctx, root, rel, r, target, visited); err != nil {
+		if err := indexHostPythonEntry(ctx, root, rel, primary, r, target, visited); err != nil {
 			return err
 		}
 	}
@@ -74,7 +87,7 @@ func indexHostPython(ctx context.Context, root *os.Root, installation string, r 
 
 // indexHostPythonEntry records the direct regular-file children of one
 // distribution directory. Nested directories are not descended.
-func indexHostPythonEntry(ctx context.Context, root *os.Root, rel string, r *hostFileResolver, target *Target, visited *int) error {
+func indexHostPythonEntry(ctx context.Context, root *os.Root, rel, primary string, r *hostFileResolver, target *Target, visited *int) error {
 	if _, err := hostLstat(root, rel); err != nil {
 		hostIssue(target, CapPythonDistributions, filepath.Join(r.base, rel), "Python distribution directory is unavailable or linked", err)
 		return nil
@@ -93,10 +106,6 @@ func indexHostPythonEntry(ctx context.Context, root *os.Root, rel string, r *hos
 	if len(children) > hostEntryLimit {
 		hostIssue(target, CapPythonDistributions, filepath.Join(r.base, rel), fmt.Sprintf("Python distribution entry limit exceeded (%d)", hostEntryLimit))
 		children = children[:hostEntryLimit]
-	}
-	primary := "METADATA"
-	if strings.HasSuffix(strings.ToLower(rel), ".egg-info") {
-		primary = "PKG-INFO"
 	}
 	primaryFound := false
 	for _, child := range children {

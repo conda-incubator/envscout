@@ -156,8 +156,10 @@ func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 		}
 	}
 	for _, name := range r.paths {
-		lower := strings.ToLower(filepath.ToSlash(name))
-		primary := (strings.HasSuffix(lower, ".dist-info/metadata") || strings.HasSuffix(lower, ".egg-info/pkg-info") || (strings.HasSuffix(lower, ".egg-info") && r.files[name].Mode().IsRegular()))
+		parentPrimary := pythonPrimaryForContainer(filepath.Dir(name))
+		// Identity gaps retain lowercase suffix matching, not exact primary admission.
+		primary := (parentPrimary != "" && strings.HasSuffix(strings.ToLower(filepath.ToSlash(name)), "/"+strings.ToLower(parentPrimary))) ||
+			(pythonPrimaryForContainer(name) == "PKG-INFO" && r.files[name].Mode().IsRegular())
 		if primary && !observed[name] && !strings.HasPrefix(filepath.Base(name), "Python-") {
 			hostIssue(target, CapPythonDistributions, filepath.Join(prefix.Path, name), "Python distribution metadata did not produce an installed identity")
 		}

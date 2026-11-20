@@ -84,9 +84,11 @@ The flowchart omits detailed failure and cancellation branches. Arrows show poss
 - `scan`: one SBOM per discovered directory environment, or one whole-image SBOM for an OCI archive's final filesystem. Cataloging is offline.
 - `lint`: no prerequisite SBOM. Host collection discovers targets, validates canonical records, prepares coverage, optionally associates projects, then inspects evidence. Images can also yield historical-layer evidence of retained content.
 
-[`ParseCondaRecord`](../internal/inventory/records.go) parses original document bytes and preserves ownership omission versus an explicitly empty list. Readers own file admission, bounds and source attribution: host records use confined reads directly, while image records retain the Syft resolver path. The host Python metadata resolver remains separate.
+[`ParseCondaRecord`](../internal/inventory/records.go) parses original document bytes and preserves ownership omission versus an explicitly empty list. Readers own file admission, bounds and source attribution: host records use confined reads directly, final image records retain the Syft resolver path, and historical installed records retain their layer-reference reads and limits. Historical cache index markers still use their separate index parser. The host Python metadata resolver remains separate.
 
 The pure [ownership index](../internal/inventory/ownership.go) records caller-admitted path claims and sticky ambiguity; the host collector still localizes paths, checks its metadata index and reports ownership gaps. The [history parser](../internal/discovery/history.go) counts transaction headers from a reader, while discovery retains cancellation, total-byte bounds and confined file access.
+
+[Host Python metadata classification](../internal/evidence/host_python.go) shares the container-to-primary filename decision, not one admission policy. Exact primary-file presence, lowercase identity-gap checks, virtualenv-only missing-primary issues and direct supporting-file cataloging remain distinct.
 
 ## Lint rule extension
 
