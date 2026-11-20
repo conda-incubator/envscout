@@ -88,13 +88,13 @@ The flowchart omits detailed failure and cancellation branches. Arrows show poss
 
 Rules are compiled-in Go checks, not runtime plugins. The [registry](../internal/lint/registry.go) defines stable IDs/versions, descriptions, sources, capabilities, profile defaults, recommendations and exceptions. Configuration adjusts registered rules; `--list-rules` uses this registry.
 
-[`BuildPolicy`, `Requirements` and `Evaluate`](../internal/lint/engine.go) resolve policy, derive collection requests and evaluate snapshots. A private [execution view](../internal/lint/execution.go) holds normalized rule options for requests and enablement/applicability, without changing public policy serialization or digests. The clock and cross-target peers belong to [lint-owned evaluation context](../internal/lint/evaluation.go), not collected evidence.
+[`BuildPolicy`, `Requirements` and `Evaluate`](../internal/lint/engine.go) resolve policy, derive collection requests and evaluate snapshots. A private [execution view](../internal/lint/execution.go) combines normalized options with support derived from the registry once per operation. Policy validation, requests, preparation and applicability use that support; public policy serialization and digests are unchanged. [Named capability constants](../internal/evidence/model.go) connect requests, collector coverage and rules without changing their string values. The clock and cross-target peers belong to [lint-owned evaluation context](../internal/lint/evaluation.go), not collected evidence.
 
 Collectors own I/O; `Check` reads a target and effective options, returning an outcome and findings without mutation or fixes. Context-aware preparation supplies the clock or peer scope and prepares immutable shared facts once per evaluation. The engine applies suppressions and report limits. Checks must respect coverage: partial evidence can establish findings, not absence. `unknown`, `unavailable` and `not_applicable` are not `pass`.
 
 To add or improve a rule:
 
-1. Define the observation and limits; reuse facts. Add bounded collectors with coverage and issue reporting for new evidence.
+1. Define the observation and limits; reuse facts and named capabilities. Add bounded collectors with coverage and issue reporting for new evidence; rule support metadata does not replace collector dependency checks.
 2. Implement the check in `internal/lint`; register metadata, capabilities, source/virtualenv support and profile defaults. Reuse finding helpers; use context-aware preparation when a check needs the evaluation clock, peer scope or shared facts.
 3. Test findings, clean/incomplete evidence, applicability, policy overrides, deterministic identity and snapshot immutability. Test collector/CLI contracts when changed.
 4. Bump rule/ruleset versions for predicate changes and profile/report/config versions for contract changes. Keep rule-specific branches out of the engine and CLI.

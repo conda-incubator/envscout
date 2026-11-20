@@ -207,10 +207,11 @@ func runLocalCheck(target evidence.Target, id string, check func(evidence.Target
 	if len(contexts) > 0 {
 		context = contexts[0]
 	}
-	rule := Rule{ID: id, Available: true, TargetKinds: []string{"dir"}, Check: check}
-	if registered, ok := LookupRule(id); ok {
-		rule = registered
+	rule, ok := LookupRule(id)
+	if !ok {
+		panic("test check requires a registered rule: " + id)
 	}
+	rule.Check = check
 	if rule.prepare != nil {
 		rule.Check = rule.prepare(context)
 	}
@@ -687,6 +688,7 @@ func TestRequestedSpecsConstraintsNotPinnedBoolean(t *testing.T) {
 }
 
 func TestLocalChecksDoNotMutateFacts(t *testing.T) {
+	supportInjectRegistryRow(t)
 	x := localTarget(localRecord("numpy", "2"), localRecord("conda", "24"), localRecord("python", "3.10"))
 	x.Python = []evidence.PythonDistribution{localDistribution("numpy", "2", "numpy"), localDistribution("numpy", "3", "")}
 	x.Archives = []evidence.Artifact{{Path: "/z", Bytes: 2}, {Path: "/a", Bytes: 3}}
@@ -697,7 +699,7 @@ func TestLocalChecksDoNotMutateFacts(t *testing.T) {
 		Records         []inventory.CondaRecord
 	}{x, x.Prefixes, context.peers, x.Prefixes[0].Records})
 	for _, check := range []func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding){checkPipInstalled, checkPipShadows, checkWorkingBase, prepareDuplicates(context), checkMixedChannels, checkHostCache, preparePythonEOL(context), checkInstalledLock, checkRequestedSpecs} {
-		runLocalCheck(x, "TST", check)
+		runLocalCheck(x, "TST001", check)
 	}
 	after, _ := json.Marshal(struct {
 		Target          evidence.Target

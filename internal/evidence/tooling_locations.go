@@ -49,7 +49,7 @@ func validShebang(header []byte) bool {
 
 func (c *imageCollector) collectTools(capability string) error {
 	commands, output := osPackageCommands, &c.target.Tools
-	if capability == "shell-tools" {
+	if capability == CapShellTools {
 		commands, output = shellCommands, &c.target.Shells
 	}
 	seen := map[file.ID]bool{}
@@ -114,7 +114,7 @@ func (c *imageCollector) collectRuntime(asserted string) error {
 		c.target.RuntimePrefix = asserted
 	}
 	if c.loaded.Image.Metadata.RawConfig == nil {
-		c.issue("runtime-config", "image startup", "verified image configuration is unavailable")
+		c.issue(CapRuntimeConfig, "image startup", "verified image configuration is unavailable")
 		return nil
 	}
 	config := c.loaded.Image.Metadata.Config.Config
@@ -127,7 +127,7 @@ func (c *imageCollector) collectRuntime(asserted string) error {
 			entries++
 			bytesRead += len(value)
 			if entries > imageEntryLimit || bytesRead > imageMetadataLimit || len(value) > 4096 {
-				c.limit("runtime-config", "image startup", "runtime configuration limit exceeded")
+				c.limit(CapRuntimeConfig, "image startup", "runtime configuration limit exceeded")
 				return nil
 			}
 		}
@@ -179,7 +179,7 @@ func (c *imageCollector) collectRuntime(asserted string) error {
 			return c.ctx.Err()
 		}
 		if err != nil {
-			c.issue("runtime-config", "image startup", "runtime command path cannot be resolved")
+			c.issue(CapRuntimeConfig, "image startup", "runtime command path cannot be resolved")
 			continue
 		}
 		if !found {
@@ -190,7 +190,7 @@ func (c *imageCollector) collectRuntime(asserted string) error {
 			if c.ctx.Err() != nil {
 				return c.ctx.Err()
 			}
-			c.issue("runtime-config", "image startup", "runtime command evidence could not be inspected")
+			c.issue(CapRuntimeConfig, "image startup", "runtime command evidence could not be inspected")
 			continue
 		}
 		if ref == nil {

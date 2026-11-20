@@ -34,7 +34,7 @@ func cacheAncestor(p string, roots map[string]bool) string {
 // Historical trees contain diff entries, not runtime visibility. Keep their
 // reference identities until all confirmed cache contexts and final links are known.
 func (c *imageCollector) collectLayers() error {
-	const capability = "layer-retention"
+	const capability = CapLayerRetention
 	// Compressed descriptors come only from the raw manifest. Stereoscope's
 	// Layer.Metadata.Digest is the uncompressed diffID and its Size is often zero.
 	var manifest v1.Manifest

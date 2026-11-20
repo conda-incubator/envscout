@@ -108,7 +108,7 @@ func checkCAPackages(target evidence.Target, opts RuleOptions, rule Rule) (Outco
 
 func checkVirtualenvCertifi(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
 	outcome := Outcome{Status: Pass}
-	if !completeOf(target, "prefixes") || !completeOf(target, "python-distributions") {
+	if !completeOf(target, evidence.CapPrefixes) || !completeOf(target, evidence.CapPythonDistributions) {
 		outcome.Status, outcome.Reason = Unknown, "virtualenv discovery or installed Python metadata coverage is incomplete"
 	}
 	prefix := target.Prefixes[0]

@@ -49,6 +49,7 @@ func BuildPolicy(config Policy, options Options) (Policy, error) {
 	}
 	p := Policy{Version: ConfigVersion, Source: source, Profile: profile, FailOn: failOn,
 		Rules: make(map[string]RuleOptions, len(registry)), Suppressions: slices.Clone(config.Suppressions)}
+	execution := executionFromPolicy(config)
 	for i := range p.Suppressions {
 		p.Suppressions[i].Fingerprint = strings.ToLower(p.Suppressions[i].Fingerprint)
 	}
@@ -77,10 +78,11 @@ func BuildPolicy(config Policy, options Options) (Policy, error) {
 		if !ok {
 			return Policy{}, fmt.Errorf("unknown lint rule %q", id)
 		}
-		if !rule.Available {
-			return Policy{}, fmt.Errorf("rule %s is unavailable: %s", id, rule.UnavailableReason)
+		support := execution.rules[rule.ID].support
+		if !support.available {
+			return Policy{}, fmt.Errorf("rule %s is unavailable: %s", id, support.unavailableReason)
 		}
-		if !slices.Contains(rule.TargetKinds, source) {
+		if !support.appliesTo(source) {
 			return Policy{}, fmt.Errorf("rule %s is incompatible with source %q", id, source)
 		}
 		selected[id] = true
@@ -96,6 +98,7 @@ func BuildPolicy(config Policy, options Options) (Policy, error) {
 		disabled[id] = true
 	}
 	for _, rule := range registry {
+		support := execution.rules[rule.ID].support
 		d := rule.Defaults[profile]
 		configured := config.Rules[rule.ID]
 		opts := RuleOptions{Severity: cmp.Or(configured.Severity, d.Severity),
@@ -111,10 +114,10 @@ func BuildPolicy(config Policy, options Options) (Policy, error) {
 			enabled = false
 		}
 		// Unavailable profile defaults are disclosed as outcomes; explicit enables fail.
-		if enabled && configured.Enabled != nil && *configured.Enabled && !rule.Available {
-			return Policy{}, fmt.Errorf("rule %s is unavailable: %s", rule.ID, rule.UnavailableReason)
+		if enabled && configured.Enabled != nil && *configured.Enabled && !support.available {
+			return Policy{}, fmt.Errorf("rule %s is unavailable: %s", rule.ID, support.unavailableReason)
 		}
-		if enabled && !slices.Contains(rule.TargetKinds, source) {
+		if enabled && !support.appliesTo(source) {
 			return Policy{}, fmt.Errorf("rule %s is incompatible with source %q", rule.ID, source)
 		}
 		opts.Enabled = new(enabled)
@@ -147,7 +150,7 @@ func validateRuntimePrefix(prefix string) error {
 }
 
 // validEffectivePolicy rejects incomplete settings supplied by direct callers.
-func validEffectivePolicy(policy Policy) error {
+func validEffectivePolicy(policy Policy, execution executionPolicy) error {
 	if err := ValidateConfig(policy); err != nil {
 		return err
 	}
@@ -158,8 +161,9 @@ func validEffectivePolicy(policy Policy) error {
 	}
 	for _, rule := range registry {
 		options, ok := policy.Rules[rule.ID]
+		support := execution.rules[rule.ID].support
 		if !ok || options.Enabled == nil || !options.Severity.Valid() ||
-			(*options.Enabled && rule.Available && !slices.Contains(rule.TargetKinds, policy.Source)) {
+			(*options.Enabled && support.available && !support.appliesTo(policy.Source)) {
 			return fmt.Errorf("rule settings not normalized")
 		}
 	}
@@ -186,12 +190,12 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 		Project       string `json:"project"`
 	}{policy, policy.Source, policy.RuntimePrefix, policy.Project})
 	r.ConfigDigest = fmt.Sprintf("sha256:%x", sha256.Sum256(encoded))
-	if err := validEffectivePolicy(policy); err != nil {
+	execution := executionFromPolicy(policy)
+	if err := validEffectivePolicy(policy, execution); err != nil {
 		r.Status = "failed"
 		r.Issues = append(r.Issues, evidence.Issue{Capability: "policy", Message: "lint evaluation requires a normalized effective policy from BuildPolicy"})
 		return r
 	}
-	execution := executionFromPolicy(policy)
 	targets := slices.Clone(snapshot.Targets)
 	slices.SortFunc(targets, func(a, b evidence.Target) int { return strings.Compare(a.ID, b.ID) })
 	var peers []evidence.Prefix
@@ -205,7 +209,8 @@ func Evaluate(snapshot evidence.Snapshot, policy Policy, now time.Time) Report {
 	context := evaluationContext{now: now, peers: peers}
 	checks := map[string]func(evidence.Target, RuleOptions, Rule) (Outcome, []Finding){}
 	for _, rule := range registry {
-		if rule.prepare != nil && execution.rules[rule.ID].enabled && slices.Contains(rule.TargetKinds, execution.source) {
+		entry := execution.rules[rule.ID]
+		if rule.prepare != nil && entry.enabled && entry.support.appliesTo(execution.source) {
 			checks[rule.ID] = rule.prepare(context)
 		}
 	}

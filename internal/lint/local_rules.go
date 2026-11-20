@@ -20,7 +20,7 @@ import (
 // package can support a positive finding even when another prefix was unreadable.
 func localRecordOutcome(target evidence.Target) Outcome {
 	outcome := Outcome{Status: Pass, SubjectCount: len(target.Prefixes)}
-	if !completeOf(target, "prefixes") || !completeOf(target, "conda-records") {
+	if !completeOf(target, evidence.CapPrefixes) || !completeOf(target, evidence.CapCondaRecords) {
 		outcome.Status, outcome.Reason = Unknown, "prefix discovery or conda record coverage is incomplete"
 	}
 	for _, prefix := range target.Prefixes {
@@ -87,7 +87,7 @@ func checkPipInstalled(target evidence.Target, opts RuleOptions, rule Rule) (Out
 	if outcome.Status == NotApplicable {
 		return outcome, nil
 	}
-	if !completeOf(target, "python-distributions") || (target.Coverage["conda-records"] != evidence.Complete && target.Coverage["conda-records"] != evidence.Partial) {
+	if !completeOf(target, evidence.CapPythonDistributions) || (target.Coverage[evidence.CapCondaRecords] != evidence.Complete && target.Coverage[evidence.CapCondaRecords] != evidence.Partial) {
 		outcome.Status, outcome.Reason = Unknown, "complete conda ownership and Python distribution metadata are required to establish absence of an owner"
 		return outcome, nil
 	}
@@ -148,7 +148,7 @@ func checkPipShadows(target evidence.Target, opts RuleOptions, rule Rule) (Outco
 	if outcome.Status == NotApplicable {
 		return outcome, nil
 	}
-	if !completeOf(target, "python-distributions") {
+	if !completeOf(target, evidence.CapPythonDistributions) {
 		outcome.Status, outcome.Reason = Unknown, "Python distribution coverage is incomplete"
 	}
 	var findings []Finding
@@ -212,7 +212,7 @@ func checkPipShadows(target evidence.Target, opts RuleOptions, rule Rule) (Outco
 			}
 		}
 		// An orphan is established only after every conda ownership record was read.
-		if !ownershipComplete || !completeOf(target, "conda-records") || !completeOf(target, "python-distributions") {
+		if !ownershipComplete || !completeOf(target, evidence.CapCondaRecords) || !completeOf(target, evidence.CapPythonDistributions) {
 			continue
 		}
 		for _, orphan := range orphans {
@@ -389,7 +389,7 @@ func checkMixedChannels(target evidence.Target, opts RuleOptions, rule Rule) (Ou
 
 func checkHostCache(target evidence.Target, opts RuleOptions, rule Rule) (Outcome, []Finding) {
 	outcome := Outcome{Status: Pass, SubjectCount: 1}
-	if !completeOf(target, "host-cache") {
+	if !completeOf(target, evidence.CapHostCache) {
 		outcome.Status, outcome.Reason = Unknown, "host package-cache coverage is incomplete"
 	}
 	artifacts := append(slices.Clone(target.Archives), target.Extracted...)
@@ -397,7 +397,7 @@ func checkHostCache(target evidence.Target, opts RuleOptions, rule Rule) (Outcom
 		artifacts[i].Bytes = 0 // Extracted payloads are not traversed by host lint.
 	}
 	if len(artifacts) == 0 {
-		if len(target.Prefixes) == 0 && outcome.Status == Pass && completeOf(target, "prefixes") {
+		if len(target.Prefixes) == 0 && outcome.Status == Pass && completeOf(target, evidence.CapPrefixes) {
 			outcome.Status, outcome.Reason = NotApplicable, "no conda environment or record-derived cache was found"
 		}
 		return outcome, nil
@@ -496,7 +496,7 @@ func checkInstalledLock(target evidence.Target, opts RuleOptions, rule Rule) (Ou
 	outcome := Outcome{Status: Pass, SubjectCount: 1}
 	selection := target.Lock
 	if selection == nil {
-		if completeOf(target, "installed-lock") {
+		if completeOf(target, evidence.CapInstalledLock) {
 			outcome.Status, outcome.Reason = NotApplicable, "no installed Pixi lock association was selected"
 		} else {
 			outcome.Status, outcome.Reason = Unknown, "installed lock selection was not completely inspected"
@@ -508,7 +508,7 @@ func checkInstalledLock(target evidence.Target, opts RuleOptions, rule Rule) (Ou
 		return outcome, nil
 	}
 	report := selection.Report
-	if !report.Complete || len(report.Unknown) > 0 || !completeOf(target, "installed-lock") {
+	if !report.Complete || len(report.Unknown) > 0 || !completeOf(target, evidence.CapInstalledLock) {
 		outcome.Status, outcome.Reason = Unknown, "installed conda metadata comparison has incomplete evidence or unresolved identities"
 	}
 	count := len(report.Missing) + len(report.Extra) + len(report.Changed)

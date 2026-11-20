@@ -566,9 +566,9 @@ func TestSampleLimitAndByteSaturation(t *testing.T) {
 	}
 }
 
-// testOnlyRule demonstrates that the generic evaluator dispatches to a new
-// rule's Check without any change to evaluateRule or a rule-ID switch.
+// A new registry row dispatches without any evaluator edits or rule-ID switch.
 func TestExtensibleRuleDispatchesThroughGenericEvaluator(t *testing.T) {
+	supportInjectRegistryRow(t)
 	called := false
 	extra := Rule{
 		ID: "TST001", Version: "1", Name: "test", Available: true,
@@ -580,12 +580,10 @@ func TestExtensibleRuleDispatchesThroughGenericEvaluator(t *testing.T) {
 			return Outcome{SubjectCount: 1}, []Finding{f}
 		},
 	}
+	registry[ruleIndex[extra.ID]] = extra
 	policy := Policy{Rules: map[string]RuleOptions{"TST001": {Enabled: boolPtr(true), Severity: Warning}}}
 	outcome, findings := executionFromPolicy(policy).evaluateRule(completeTarget("dir"), extra)
 	if !called || outcome.Status != FindingStatus || len(findings) != 1 || findings[0].RuleID != "TST001" {
 		t.Fatalf("generic dispatch failed: called=%v status=%s", called, outcome.Status)
-	}
-	if _, ok := LookupRule("TST001"); ok {
-		t.Fatal("test-only rule must not leak into the registry")
 	}
 }

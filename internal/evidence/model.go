@@ -18,6 +18,25 @@ const (
 	NotCollected = "not_collected"
 )
 
+// Capability names are shared by requests, collection coverage and lint rules.
+const (
+	CapPrefixes              = "prefixes"
+	CapHistory               = "history"
+	CapProjectAssociation    = "project-association"
+	CapCondaRecords          = "conda-records"
+	CapPythonDistributions   = "python-distributions"
+	CapHostCache             = "host-cache"
+	CapInstalledLock         = "installed-lock"
+	CapManifestLock          = "manifest-lock"
+	CapFinalCache            = "final-cache"
+	CapCacheLinkDependencies = "cache-link-dependencies"
+	CapToolingPrefix         = "tooling-prefix"
+	CapRuntimeConfig         = "runtime-config"
+	CapLayerRetention        = "layer-retention"
+	CapOSPackageTools        = "os-package-tools"
+	CapShellTools            = "shell-tools"
+)
+
 type Issue struct {
 	Capability   string `json:"capability"`
 	Path         string `json:"path"`

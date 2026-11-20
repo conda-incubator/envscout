@@ -30,13 +30,13 @@ func hostIssue(target *Target, capability, path, message string, causes ...error
 }
 
 func (env hostEnvironment) collectFacts(ctx context.Context, caches map[string]Target) error {
-	if Requested(env.request, "python-distributions") {
+	if Requested(env.request, CapPythonDistributions) {
 		collectHostPython(ctx, env.target, env.prefix)
 	}
-	if Requested(env.request, "host-cache") && ctx.Err() == nil {
+	if Requested(env.request, CapHostCache) && ctx.Err() == nil {
 		collectHostCache(ctx, env.target, env.prefix, caches)
 	}
-	if Requested(env.request, "installed-lock") && ctx.Err() == nil {
+	if Requested(env.request, CapInstalledLock) && ctx.Err() == nil {
 		collectHostPixi(ctx, env.target, env.prefix, env.request)
 	}
 	if err := ctx.Err(); err != nil {
@@ -49,7 +49,7 @@ func (env hostEnvironment) collectFacts(ctx context.Context, caches map[string]T
 func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 	root, err := os.OpenRoot(prefix.Path)
 	if err != nil {
-		hostIssue(target, "python-distributions", prefix.Path, "Python filesystem unavailable", err)
+		hostIssue(target, CapPythonDistributions, prefix.Path, "Python filesystem unavailable", err)
 		return
 	}
 	defer func() { _ = root.Close() }()
@@ -70,18 +70,18 @@ func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 			continue
 		}
 		if err != nil || !info.IsDir() {
-			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, parent), "Python installation directory is unavailable or linked", err)
+			hostIssue(target, CapPythonDistributions, filepath.Join(prefix.Path, parent), "Python installation directory is unavailable or linked", err)
 			continue
 		}
 		dir, err := root.Open(parent)
 		if err != nil {
-			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, parent), "Python installation directory could not be enumerated", err)
+			hostIssue(target, CapPythonDistributions, filepath.Join(prefix.Path, parent), "Python installation directory could not be enumerated", err)
 			continue
 		}
 		entries, readErr := dir.ReadDir(hostEntryLimit + 1)
 		_ = dir.Close()
 		if readErr != nil && !errors.Is(readErr, io.EOF) || len(entries) > hostEntryLimit {
-			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, parent), "Python installation directory entry limit or enumeration failure", readErr)
+			hostIssue(target, CapPythonDistributions, filepath.Join(prefix.Path, parent), "Python installation directory entry limit or enumeration failure", readErr)
 		}
 		if len(entries) > hostEntryLimit {
 			entries = entries[:hostEntryLimit]
@@ -100,7 +100,7 @@ func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 			continue
 		}
 		if err := indexHostPython(ctx, root, installation, r, target, &visited); err != nil {
-			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, installation), err.Error(), err)
+			hostIssue(target, CapPythonDistributions, filepath.Join(prefix.Path, installation), err.Error(), err)
 		}
 		if ctx.Err() != nil || visited > hostPathLimit {
 			break
@@ -109,14 +109,14 @@ func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 	sort.Strings(r.paths)
 	packages, _, err := python.NewInstalledPackageCataloger().Catalog(ctx, r)
 	if err != nil || r.issue != nil {
-		hostIssue(target, "python-distributions", prefix.Path, "installed Python metadata catalog is incomplete", err, r.issue)
+		hostIssue(target, CapPythonDistributions, prefix.Path, "installed Python metadata catalog is incomplete", err, r.issue)
 	}
 	owners := map[string]string{}
 	ambiguous := map[string]bool{}
 	observed := map[string]bool{}
 	for _, located := range prefix.Records {
 		if !located.OwnershipKnown {
-			hostIssue(target, "python-distributions", located.Path, "conda file ownership metadata is unavailable")
+			hostIssue(target, CapPythonDistributions, located.Path, "conda file ownership metadata is unavailable")
 		}
 		addOwner := func(path string) {
 			local, ok := r.local(path)
@@ -137,7 +137,7 @@ func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 	}
 	for _, p := range packages {
 		if p.Type != pkg.PythonPkg || p.Name == "" || p.Version == "" {
-			hostIssue(target, "python-distributions", prefix.Path, "installed Python distribution identity is incomplete")
+			hostIssue(target, CapPythonDistributions, prefix.Path, "installed Python distribution identity is incomplete")
 			continue
 		}
 		for _, location := range p.Locations.ToSlice() {
@@ -152,7 +152,7 @@ func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 			owner := owners[local]
 			if ambiguous[local] {
 				owner = ""
-				hostIssue(target, "python-distributions", location.RealPath, "distribution metadata has multiple conda owners")
+				hostIssue(target, CapPythonDistributions, location.RealPath, "distribution metadata has multiple conda owners")
 			}
 			target.Python = append(target.Python, PythonDistribution{Name: p.Name, Version: p.Version, Path: location.RealPath, OwnedBy: owner})
 		}
@@ -161,7 +161,7 @@ func collectHostPython(ctx context.Context, target *Target, prefix Prefix) {
 		lower := strings.ToLower(filepath.ToSlash(name))
 		primary := (strings.HasSuffix(lower, ".dist-info/metadata") || strings.HasSuffix(lower, ".egg-info/pkg-info") || (strings.HasSuffix(lower, ".egg-info") && r.files[name].Mode().IsRegular()))
 		if primary && !observed[name] && !strings.HasPrefix(filepath.Base(name), "Python-") {
-			hostIssue(target, "python-distributions", filepath.Join(prefix.Path, name), "Python distribution metadata did not produce an installed identity")
+			hostIssue(target, CapPythonDistributions, filepath.Join(prefix.Path, name), "Python distribution metadata did not produce an installed identity")
 		}
 	}
 	sort.Slice(target.Python, func(i, j int) bool { return target.Python[i].Path < target.Python[j].Path })
@@ -180,14 +180,14 @@ func collectHostCache(ctx context.Context, target *Target, prefix Prefix, caches
 				continue
 			}
 			if !filepath.IsAbs(path) || strings.ContainsRune(path, 0) || filepath.Dir(filepath.Clean(path)) == string(filepath.Separator) {
-				hostIssue(target, "host-cache", located.Path, "record cache path is not a safe absolute location")
+				hostIssue(target, CapHostCache, located.Path, "record cache path is not a safe absolute location")
 				continue
 			}
 			roots[filepath.Dir(filepath.Clean(path))] = true
 		}
 	}
 	if prefix.RecordCoverage != Complete {
-		hostIssue(target, "host-cache", target.Input, "record-referenced cache roots are incomplete")
+		hostIssue(target, CapHostCache, target.Input, "record-referenced cache roots are incomplete")
 	}
 	var ordered []string
 	for path := range roots {
@@ -205,12 +205,12 @@ func collectHostCache(ctx context.Context, target *Target, prefix Prefix, caches
 			continue // recorded build-host paths need not still exist
 		}
 		if err != nil || !info.IsDir() {
-			hostIssue(target, "host-cache", path, "cache root is inaccessible or linked", err)
+			hostIssue(target, CapHostCache, path, "cache root is inaccessible or linked", err)
 			continue
 		}
 		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil {
-			hostIssue(target, "host-cache", path, "cache root could not be resolved", err)
+			hostIssue(target, CapHostCache, path, "cache root could not be resolved", err)
 			continue
 		}
 		if seenRoots[resolved] {
@@ -221,7 +221,7 @@ func collectHostCache(ctx context.Context, target *Target, prefix Prefix, caches
 			applyHostCache(target, facts)
 			continue
 		}
-		facts := Target{Coverage: map[string]string{"host-cache": Complete}}
+		facts := Target{Coverage: map[string]string{CapHostCache: Complete}}
 		scanHostCache(ctx, &facts, path, &visited)
 		caches[resolved] = facts
 		applyHostCache(target, facts)
@@ -241,32 +241,32 @@ func applyHostCache(target *Target, facts Target) {
 	}{{&target.Archives, facts.Archives}, {&target.Extracted, facts.Extracted}} {
 		available := max(0, hostEntryLimit-len(target.Archives)-len(target.Extracted))
 		if available < len(artifacts.src) {
-			hostIssue(target, "host-cache", target.Input, "cache artifact limit exceeded across roots")
+			hostIssue(target, CapHostCache, target.Input, "cache artifact limit exceeded across roots")
 		}
 		*artifacts.dst = append(*artifacts.dst, artifacts.src[:min(available, len(artifacts.src))]...)
 	}
 	target.Issues = append(target.Issues, facts.Issues...)
-	if facts.Coverage["host-cache"] != Complete {
-		target.Coverage["host-cache"] = Partial
+	if facts.Coverage[CapHostCache] != Complete {
+		target.Coverage[CapHostCache] = Partial
 	}
 }
 
 func scanHostCache(ctx context.Context, target *Target, path string, visited *int) {
 	root, err := os.OpenRoot(path)
 	if err != nil {
-		hostIssue(target, "host-cache", path, "cache root is not a readable directory", err)
+		hostIssue(target, CapHostCache, path, "cache root is not a readable directory", err)
 		return
 	}
 	entries, err := root.Open(".")
 	if err != nil {
 		_ = root.Close()
-		hostIssue(target, "host-cache", path, "cache directory could not be enumerated", err)
+		hostIssue(target, CapHostCache, path, "cache directory could not be enumerated", err)
 		return
 	}
 	children, readErr := entries.ReadDir(hostEntryLimit + 1)
 	_ = entries.Close()
 	if readErr != nil || len(children) > hostEntryLimit {
-		hostIssue(target, "host-cache", path, "cache directory entry limit or enumeration failure", readErr)
+		hostIssue(target, CapHostCache, path, "cache directory entry limit or enumeration failure", readErr)
 	}
 	if len(children) > hostEntryLimit {
 		children = children[:hostEntryLimit]
@@ -279,11 +279,11 @@ func scanHostCache(ctx context.Context, target *Target, path string, visited *in
 		name := child.Name()
 		*visited++
 		if *visited > hostPathLimit || len(target.Archives)+len(target.Extracted) >= hostEntryLimit {
-			hostIssue(target, "host-cache", path, "cache traversal or artifact entry limit exceeded")
+			hostIssue(target, CapHostCache, path, "cache traversal or artifact entry limit exceeded")
 			break
 		}
 		if child.Type()&fs.ModeSymlink != 0 {
-			hostIssue(target, "host-cache", filepath.Join(path, name), "linked cache entry is not followed")
+			hostIssue(target, CapHostCache, filepath.Join(path, name), "linked cache entry is not followed")
 			continue
 		}
 		if !child.IsDir() {
@@ -292,7 +292,7 @@ func scanHostCache(ctx context.Context, target *Target, path string, visited *in
 			}
 			info, err := child.Info()
 			if err != nil || !info.Mode().IsRegular() || info.Size() < 0 {
-				hostIssue(target, "host-cache", filepath.Join(path, name), "archive is not a readable regular file", err)
+				hostIssue(target, CapHostCache, filepath.Join(path, name), "archive is not a readable regular file", err)
 				continue
 			}
 			target.Archives = append(target.Archives, Artifact{Path: filepath.Join(path, name), Kind: "archive", Bytes: info.Size()})
@@ -304,11 +304,11 @@ func scanHostCache(ctx context.Context, target *Target, path string, visited *in
 			continue
 		}
 		if err != nil {
-			hostIssue(target, "host-cache", filepath.Join(path, marker), "cache marker is not bounded regular metadata", err)
+			hostIssue(target, CapHostCache, filepath.Join(path, marker), "cache marker is not bounded regular metadata", err)
 			continue
 		}
 		if _, err := gorattler.ParseIndexJSON(data); err != nil {
-			hostIssue(target, "host-cache", filepath.Join(path, marker), "cache marker is not valid conda index metadata")
+			hostIssue(target, CapHostCache, filepath.Join(path, marker), "cache marker is not valid conda index metadata")
 			continue
 		}
 		// Presence needs only a canonical marker. A recursive payload census is

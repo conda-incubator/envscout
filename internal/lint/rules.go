@@ -52,9 +52,9 @@ func checkRevision(target evidence.Target, opts RuleOptions, rule Rule) (Outcome
 		}
 		findings = append(findings, f)
 	}
-	if len(prefixes) == 0 && completeOf(target, "prefixes") {
+	if len(prefixes) == 0 && completeOf(target, evidence.CapPrefixes) {
 		outcome.Status, outcome.Reason = NotApplicable, "zero recognized environment subjects in the inspected scope"
-	} else if missing > 0 || !completeOf(target, "prefixes") || !completeOf(target, "history") {
+	} else if missing > 0 || !completeOf(target, evidence.CapPrefixes) || !completeOf(target, evidence.CapHistory) {
 		outcome.Status = Unknown
 		outcome.Reason = fmt.Sprintf("%d environment subjects have no readable revision; history or prefix coverage may be incomplete", missing)
 	}
@@ -69,7 +69,7 @@ func checkProjectLock(target evidence.Target, opts RuleOptions, rule Rule) (Outc
 	switch {
 	case project == nil || !project.Associated:
 		outcome.Status, outcome.Reason = NotApplicable, "no explicit --project association"
-	case !completeOf(target, "project-association"):
+	case !completeOf(target, evidence.CapProjectAssociation):
 		outcome.Status, outcome.Reason = Unknown, "associated project scope was not completely inspected"
 	case project.LockPath != "":
 		outcome.Reason = "recognized lockfile is present; installation synchronization is outside this check"
@@ -131,18 +131,18 @@ func checkExtractedCache(target evidence.Target, opts RuleOptions, rule Rule) (O
 	outcome := Outcome{Status: Pass}
 	outcome.SubjectCount = 1
 	if len(target.Extracted) == 0 {
-		if !completeOf(target, "final-cache") {
+		if !completeOf(target, evidence.CapFinalCache) {
 			outcome.Status, outcome.Reason = Unknown, "required final-cache coverage is not complete; absence was not established"
 		}
 		return outcome, nil
 	}
 	severity := opts.Severity
-	if !completeOf(target, "cache-link-dependencies") || target.CacheLinked {
+	if !completeOf(target, evidence.CapCacheLinkDependencies) || target.CacheLinked {
 		severity = Info
 	}
 	f := newFinding(target, rule, severity, nil, target.Extracted)
 	f.Evidence.CacheLinked = target.CacheLinked
-	f.Evidence.LinkCoverage = target.Coverage["cache-link-dependencies"]
+	f.Evidence.LinkCoverage = target.Coverage[evidence.CapCacheLinkDependencies]
 	if f.Evidence.LinkCoverage == "" {
 		f.Evidence.LinkCoverage = evidence.NotCollected
 	}
@@ -150,7 +150,7 @@ func checkExtractedCache(target evidence.Target, opts RuleOptions, rule Rule) (O
 	switch {
 	case target.CacheLinked:
 		f.Evidence.Notes = []string{"Runtime references to cache content were observed. Preserve those dependencies before removing cache paths."}
-	case !completeOf(target, "cache-link-dependencies"):
+	case !completeOf(target, evidence.CapCacheLinkDependencies):
 		f.Evidence.Notes = []string{"Cache linkage inspection is incomplete. Do not assume these paths are safe to remove."}
 	default:
 		f.Evidence.Notes = []string{"No runtime cache reference was observed. Review unused entries with the package manager and test the resulting image."}
@@ -164,13 +164,13 @@ func checkPrefixRoles(target evidence.Target, opts RuleOptions, rule Rule) (Outc
 	tooling, apps := prefixRoles(target)
 	if target.RuntimeUsesTooling || slices.Contains(tooling, target.RuntimePrefix) {
 		outcome.Reason = "configured startup uses the tooling prefix"
-		if !completeOf(target, "prefixes") || !completeOf(target, "tooling-prefix") || !completeOf(target, "runtime-config") {
+		if !completeOf(target, evidence.CapPrefixes) || !completeOf(target, evidence.CapToolingPrefix) || !completeOf(target, evidence.CapRuntimeConfig) {
 			outcome.Status, outcome.Reason = Unknown, "prefix roles or runtime configuration inspection is incomplete"
 		}
 		return outcome, nil
 	}
 	if len(tooling) == 0 || len(apps) == 0 {
-		if !completeOf(target, "prefixes") || !completeOf(target, "tooling-prefix") || !completeOf(target, "runtime-config") {
+		if !completeOf(target, evidence.CapPrefixes) || !completeOf(target, evidence.CapToolingPrefix) || !completeOf(target, evidence.CapRuntimeConfig) {
 			outcome.Status, outcome.Reason = Unknown, "prefix roles or runtime configuration could not be completely inspected"
 		}
 		return outcome, nil
