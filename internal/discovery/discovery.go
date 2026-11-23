@@ -12,20 +12,31 @@ import (
 const (
 	KindConda = "conda"
 	KindVenv  = "venv"
+	//KindSystem = "system"
+	//KindGlobal = "global"
 )
+
+type PythonInstallation struct {
+	Executable     string    `json:"executable"`
+	Prefix         string    `json:"prefix",omitempty`
+	Version        string    `json:"version"`
+	Implementation string    `json:"implementation",omitempty`
+	System         bool      `json:"system",omitempty`
+	Installed      time.Time `json:"created",omitempty`
+	Installer      time.Time `json:"created",omitempty`
+}
 
 // Environment is an installed prefix; Name is its directory name, not a registry alias.
 // Kind is KindConda or KindVenv. Revision is conda history only and is always nil for venvs.
 type Environment struct {
-	Name           string    `json:"name"`
-	Path           string    `json:"path"`
-	Kind           string    `json:"kind"`
-	Revision       *int      `json:"revision"`
-	Version        string    `json:"version",omitempty`
-	Implementation string    `json:"implementation",omitempty`
-	Created        time.Time `json:"created",omitempty`
-	Modified       time.Time `json:"modified",omitempty`
-	Used           time.Time `json:"used",omitempty`
+	Name         string             `json:"name"`
+	Path         string             `json:"path"`
+	Kind         string             `json:"kind"`
+	Revision     *int               `json:"revision"`
+	Installation PythonInstallation `json:"installation",omitempty`
+	Created      time.Time          `json:"created",omitempty`
+	Modified     time.Time          `json:"modified",omitempty`
+	Used         time.Time          `json:"used",omitempty`
 }
 
 // Issue describes evidence we could not inspect; results may therefore be incomplete.
