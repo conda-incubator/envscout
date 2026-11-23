@@ -9,7 +9,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.4
 	github.com/buildkite/osc7501 v0.4.0
 	github.com/charlievieth/fastwalk v1.0.14
-	github.com/charmbracelet/x/ansi v0.11.9
+	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/conda-incubator/go-rattler v0.0.4
 	github.com/fatih/color v1.19.0
 	github.com/google/go-containerregistry v0.22.1
