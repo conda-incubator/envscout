@@ -20,6 +20,10 @@ type Environment struct {
 	Path     string `json:"path"`
 	Kind     string `json:"kind"`
 	Revision *int   `json:"revision"`
+	//Version string `json:"version"`
+    Created time.Time `json:"created"`
+	Modified time.Time `json:"modified"`
+	//Used time.Time `json:"used"`
 }
 
 // Issue describes evidence we could not inspect; results may therefore be incomplete.
