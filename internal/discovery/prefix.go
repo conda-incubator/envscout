@@ -91,7 +91,13 @@ func inspectCondaPrefix(ctx context.Context, scope *os.Root, prefix string, read
 	if !hasRecord {
 		return Environment{}, false, issues
 	}
-	env := Environment{Name: filepath.Base(prefix), Path: prefix, Kind: KindConda}
+	env := Environment{Name: filepath.Base(prefix), Path: prefix, Kind: KindConda, Modified: meta.ModTime()}
+	created, err := getFileCreatedTS(meta)
+	if err != nil {
+		issues = append(issues, issueFromError(metaPath, err))
+	} else {
+		env.Created = created
+	}
 	if !readHistory {
 		return env, true, issues
 	}
