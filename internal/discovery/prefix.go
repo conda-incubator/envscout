@@ -53,7 +53,13 @@ func inspectVenv(scope *os.Root, prefix string) (Environment, bool, []Issue) {
 	if !info.Mode().IsRegular() {
 		return Environment{}, false, []Issue{{Path: markerPath, Error: "pyvenv.cfg is not a regular file; links are not followed"}}
 	}
-	return Environment{Name: filepath.Base(prefix), Path: prefix, Kind: KindVenv}, true, nil
+	env := Environment{Name: filepath.Base(prefix), Path: prefix, Kind: KindVenv, Modified: info.ModTime()}
+	created, err := getFileCreatedTS(info)
+	if err != nil {
+		return env, true, []Issue{issueFromError(markerPath, err)}
+	}
+	env.Created = created
+	return env, true, nil
 }
 
 // inspectCondaPrefix confirms a prefix from its conda-meta directory. A prefix is a
