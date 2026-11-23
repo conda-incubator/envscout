@@ -28,6 +28,9 @@ type PythonInstallation struct {
 
 // Environment is an installed prefix; Name is its directory name, not a registry alias.
 // Kind is KindConda or KindVenv. Revision is conda history only and is always nil for venvs.
+// Created indicates approximately when the environment was created.  Modified is when
+// the environment was last changed, including when installed dist packages were changed.
+// Used is when the environment was last known to be invoked.
 type Environment struct {
 	Name         string             `json:"name"`
 	Path         string             `json:"path"`
