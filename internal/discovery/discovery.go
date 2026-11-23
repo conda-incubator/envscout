@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Environment kinds. Kind is set on every discovered environment.
@@ -20,10 +21,10 @@ type Environment struct {
 	Path     string `json:"path"`
 	Kind     string `json:"kind"`
 	Revision *int   `json:"revision"`
-	//Version string `json:"version"`
-    Created time.Time `json:"created"`
-	Modified time.Time `json:"modified"`
-	//Used time.Time `json:"used"`
+	//Version string `json:"version",omitempty`
+	Created  time.Time `json:"created",omitempty`
+	Modified time.Time `json:"modified",omitempty`
+	//Used time.Time `json:"used",omitempty`
 }
 
 // Issue describes evidence we could not inspect; results may therefore be incomplete.
