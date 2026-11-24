@@ -42,18 +42,26 @@ func inspectScopedPrefix(ctx context.Context, scope *os.Root, prefix string, rea
 // other non-regular entry is an issue. The interpreter and installed packages are not
 // examined, so a missing bin/python never invalidates the marker.
 func inspectVenv(scope *os.Root, prefix string) (Environment, bool, []Issue) {
+	var issues []Issue
 	markerPath := filepath.Join(prefix, pyvenvMarker)
 	info, err := scope.Lstat(pyvenvMarker)
 	if errors.Is(err, fs.ErrNotExist) {
-		return Environment{}, false, nil
+		return Environment{}, false, issues
 	}
 	if err != nil {
-		return Environment{}, false, []Issue{issueFromError(markerPath, err)}
+		return Environment{}, false, append(issues, issueFromError(markerPath, err))
 	}
 	if !info.Mode().IsRegular() {
-		return Environment{}, false, []Issue{{Path: markerPath, Error: "pyvenv.cfg is not a regular file; links are not followed"}}
+		return Environment{}, false, append(issues, Issue{Path: markerPath, Error: "pyvenv.cfg is not a regular file; links are not followed"})
 	}
-	return Environment{Name: filepath.Base(prefix), Path: prefix, Kind: KindVenv}, true, nil
+	env := Environment{Name: filepath.Base(prefix), Path: prefix, Kind: KindVenv, Modified: info.ModTime()}
+	created, err := getFileCreatedTS(info)
+	if err != nil {
+		issues = append(issues, issueFromError(markerPath, err))
+	} else {
+		env.Created = created
+	}
+	return env, true, issues
 }
 
 // inspectCondaPrefix confirms a prefix from its conda-meta directory. A prefix is a
@@ -85,7 +93,13 @@ func inspectCondaPrefix(ctx context.Context, scope *os.Root, prefix string, read
 	if !hasRecord {
 		return Environment{}, false, issues
 	}
-	env := Environment{Name: filepath.Base(prefix), Path: prefix, Kind: KindConda}
+	env := Environment{Name: filepath.Base(prefix), Path: prefix, Kind: KindConda, Modified: meta.ModTime()}
+	created, err := getFileCreatedTS(meta)
+	if err != nil {
+		issues = append(issues, issueFromError(metaPath, err))
+	} else {
+		env.Created = created
+	}
 	if !readHistory {
 		return env, true, issues
 	}

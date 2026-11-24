@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Environment kinds. Kind is set on every discovered environment.
@@ -15,11 +16,15 @@ const (
 
 // Environment is an installed prefix; Name is its directory name, not a registry alias.
 // Kind is KindConda or KindVenv. Revision is conda history only and is always nil for venvs.
+// Created indicates approximately when the environment was created.  Modified is when
+// the environment was last changed, including when installed dist packages were changed.
 type Environment struct {
-	Name     string `json:"name"`
-	Path     string `json:"path"`
-	Kind     string `json:"kind"`
-	Revision *int   `json:"revision"`
+	Name     string    `json:"name"`
+	Path     string    `json:"path"`
+	Kind     string    `json:"kind"`
+	Revision *int      `json:"revision"`
+	Created  time.Time `json:"created",omitempty`
+	Modified time.Time `json:"modified",omitempty`
 }
 
 // Issue describes evidence we could not inspect; results may therefore be incomplete.
